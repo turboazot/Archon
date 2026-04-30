@@ -33,6 +33,9 @@ const CLAUDE_CODE_AUTH_VARS = new Set([
   'CLAUDE_CODE_USE_VERTEX',
 ]);
 
+/** Repo-local build helper vars are stripped like other CWD .env keys, but quietly. */
+const QUIET_CWD_ENV_VARS = new Set(['ARCHON_BUILD_TARGET', 'ARCHON_BUILD_OUTFILE']);
+
 /**
  * Strip CWD .env keys and nested Claude Code session markers from process.env.
  * Keys in ~/.archon/.env (loaded afterward by each entry point) are unaffected.
@@ -61,7 +64,9 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
     } else if (result.parsed) {
       const parsedKeys = Object.keys(result.parsed);
       if (parsedKeys.length > 0) {
-        strippedFiles.push(filename);
+        if (parsedKeys.some(key => !QUIET_CWD_ENV_VARS.has(key))) {
+          strippedFiles.push(filename);
+        }
         for (const key of parsedKeys) {
           cwdKeys.add(key);
         }
@@ -75,9 +80,10 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
 
   // Tell the operator what we just did — otherwise the delete loop is silent
   // and users think their env file was loaded (see #1302).
-  if (cwdKeys.size > 0) {
+  const noisyCwdKeys = [...cwdKeys].filter(key => !QUIET_CWD_ENV_VARS.has(key));
+  if (noisyCwdKeys.length > 0) {
     process.stderr.write(
-      `[archon] stripped ${cwdKeys.size} keys from ${cwd} (${strippedFiles.join(', ')}) to prevent target repo env from leaking into Archon processes\n`
+      `[archon] stripped ${noisyCwdKeys.length} keys from ${cwd} (${strippedFiles.join(', ')}) to prevent target repo env from leaking into Archon processes\n`
     );
   }
 

@@ -10,6 +10,10 @@ description: |
   This workflow helps resolve merge conflicts by analyzing the conflicting changes,
   automatically resolving where intent is clear, and presenting options for complex conflicts.
 
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
+
 nodes:
   - id: resolve
     command: archon-resolve-merge-conflicts

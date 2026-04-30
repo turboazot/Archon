@@ -406,8 +406,8 @@ async function applyNodeConfig(
   }
 
   // mcp → load config and set mcpServers + allowedTools wildcards
-  if (nodeConfig.mcp) {
-    const mcpPath = nodeConfig.mcp;
+  const mcpPath = typeof nodeConfig.mcp === 'string' ? nodeConfig.mcp : nodeConfig.mcp?.path;
+  if (mcpPath) {
     const { servers, serverNames, missingVars } = await loadMcpConfig(mcpPath, cwd);
     options.mcpServers = servers as Options['mcpServers'];
     const mcpWildcards = serverNames.map(name => `mcp__${name}__*`);

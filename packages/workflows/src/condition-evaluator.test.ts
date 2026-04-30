@@ -23,10 +23,22 @@ import type { NodeOutput } from './schemas';
 
 function makeOutput(
   output: string,
-  state: 'completed' | 'failed' | 'skipped' = 'completed'
+  state: 'completed' | 'failed' | 'skipped' = 'completed',
+  structuredOutput?: unknown
 ): NodeOutput {
-  if (state === 'failed') return { state, output, error: 'error' };
-  return { state, output };
+  if (state === 'failed') {
+    return {
+      state,
+      output,
+      ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+      error: 'error',
+    };
+  }
+  return {
+    state,
+    output,
+    ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+  };
 }
 
 describe('evaluateCondition', () => {
@@ -55,6 +67,27 @@ describe('evaluateCondition', () => {
     const outputs = new Map([['classify', makeOutput(jsonOutput)]]);
     expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(true);
     expect(evaluateCondition("$classify.output.type == 'FEATURE'", outputs).result).toBe(false);
+  });
+
+  it('dot notation: accesses first JSON object from duplicated provider output', () => {
+    const duplicated =
+      '{"input_type":"needs_generation","prd_dir":".archon/ralph/ecommerce-products-catalogs"}' +
+      '{"input_type":"needs_generation","prd_dir":".archon/ralph/ecommerce-products-catalogs"}';
+    const outputs = new Map([['detect-input', makeOutput(duplicated)]]);
+
+    expect(
+      evaluateCondition("$detect-input.output.input_type == 'needs_generation'", outputs).result
+    ).toBe(true);
+  });
+
+  it('dot notation: prefers first-class structuredOutput over output text', () => {
+    const outputs = new Map([
+      ['detect-input', makeOutput('', 'completed', { input_type: 'needs_generation' })],
+    ]);
+
+    expect(
+      evaluateCondition("$detect-input.output.input_type == 'needs_generation'", outputs).result
+    ).toBe(true);
   });
 
   it('dot notation: returns false on invalid JSON (fails gracefully)', () => {

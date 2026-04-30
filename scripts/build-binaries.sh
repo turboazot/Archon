@@ -14,10 +14,31 @@
 
 set -euo pipefail
 
+EXPLICIT_VERSION="${VERSION+x}"
+EXPLICIT_GIT_COMMIT="${GIT_COMMIT+x}"
+EXPLICIT_TARGET="${TARGET+x}"
+EXPLICIT_OUTFILE="${OUTFILE+x}"
+ORIGINAL_VERSION="${VERSION:-}"
+ORIGINAL_GIT_COMMIT="${GIT_COMMIT:-}"
+ORIGINAL_TARGET="${TARGET:-}"
+ORIGINAL_OUTFILE="${OUTFILE:-}"
+
+if [ -f ".env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+
+  [ -n "$EXPLICIT_VERSION" ] && VERSION="$ORIGINAL_VERSION"
+  [ -n "$EXPLICIT_GIT_COMMIT" ] && GIT_COMMIT="$ORIGINAL_GIT_COMMIT"
+  [ -n "$EXPLICIT_TARGET" ] && TARGET="$ORIGINAL_TARGET"
+  [ -n "$EXPLICIT_OUTFILE" ] && OUTFILE="$ORIGINAL_OUTFILE"
+fi
+
 VERSION="${VERSION:-$(grep '"version"' package.json | head -1 | cut -d'"' -f4)}"
 GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')}"
-TARGET="${TARGET:-}"
-OUTFILE="${OUTFILE:-}"
+TARGET="${TARGET:-${ARCHON_BUILD_TARGET:-}}"
+OUTFILE="${OUTFILE:-${ARCHON_BUILD_OUTFILE:-}}"
 
 echo "Building Archon CLI v${VERSION} (commit: ${GIT_COMMIT})"
 

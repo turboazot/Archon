@@ -5,7 +5,7 @@
  * Implementations live in @archon/core (backed by the real DB);
  * the workflow engine depends only on this narrow interface.
  */
-import type { WorkflowRun, WorkflowRunStatus, ApprovalContext } from './schemas';
+import type { WorkflowRun, WorkflowRunStatus, ApprovalContext, NodeOutput } from './schemas';
 
 export const WORKFLOW_EVENT_TYPES = [
   'workflow_started',
@@ -98,7 +98,7 @@ export interface IWorkflowStore {
    * Returns an empty map when no completed nodes exist.
    * Throws on DB error — caller (executor.ts) owns the degradation policy.
    */
-  getCompletedDagNodeOutputs(workflowRunId: string): Promise<Map<string, string>>;
+  getCompletedDagNodeOutputs(workflowRunId: string): Promise<Map<string, NodeOutput>>;
 
   // Per-codebase env vars for workflow node injection
   getCodebaseEnvVars(codebaseId: string): Promise<Record<string, string>>;

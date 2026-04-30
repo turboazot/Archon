@@ -1,5 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { IWorkflowStore } from '@archon/workflows/store';
+import type { NodeOutput } from '@archon/workflows/schemas/workflow-run';
 
 // Mock DB modules before importing store-adapter
 const mockCreateWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
@@ -33,7 +34,7 @@ mock.module('../db/workflows', () => ({
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
-const mockGetCompletedDagNodeOutputs = mock(() => Promise.resolve(new Map<string, string>()));
+const mockGetCompletedDagNodeOutputs = mock(() => Promise.resolve(new Map<string, NodeOutput>()));
 mock.module('../db/workflow-events', () => ({
   createWorkflowEvent: mockCreateWorkflowEvent,
   getCompletedDagNodeOutputs: mockGetCompletedDagNodeOutputs,
@@ -111,7 +112,9 @@ describe('createWorkflowStore', () => {
   });
 
   test('delegates getCompletedDagNodeOutputs to DB', async () => {
-    const expected = new Map([['step1', 'output text']]);
+    const expected = new Map<string, NodeOutput>([
+      ['step1', { state: 'completed', output: 'output text' }],
+    ]);
     mockGetCompletedDagNodeOutputs.mockResolvedValueOnce(expected);
     const store = createWorkflowStore();
     const result = await store.getCompletedDagNodeOutputs('run-123');

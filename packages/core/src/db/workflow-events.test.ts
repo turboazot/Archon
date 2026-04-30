@@ -190,10 +190,13 @@ describe('workflow-events', () => {
   });
 
   describe('getCompletedDagNodeOutputs', () => {
-    test('returns map of nodeId → output from node_completed events', async () => {
+    test('returns map of nodeId → NodeOutput from node_completed events', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
-          { step_name: 'node-a', data: { node_output: 'output A' } },
+          {
+            step_name: 'node-a',
+            data: { node_output: 'output A', structured_output: { kind: 'A' } },
+          },
           { step_name: 'node-b', data: { node_output: 'output B' } },
         ])
       );
@@ -201,8 +204,12 @@ describe('workflow-events', () => {
       const result = await getCompletedDagNodeOutputs('run-123');
 
       expect(result.size).toBe(2);
-      expect(result.get('node-a')).toBe('output A');
-      expect(result.get('node-b')).toBe('output B');
+      expect(result.get('node-a')).toEqual({
+        state: 'completed',
+        output: 'output A',
+        structuredOutput: { kind: 'A' },
+      });
+      expect(result.get('node-b')).toEqual({ state: 'completed', output: 'output B' });
       expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('node_completed'), [
         'run-123',
       ]);
@@ -218,7 +225,7 @@ describe('workflow-events', () => {
       const result = await getCompletedDagNodeOutputs('run-456');
 
       expect(result.size).toBe(1);
-      expect(result.get('node-a')).toBe('parsed output');
+      expect(result.get('node-a')).toEqual({ state: 'completed', output: 'parsed output' });
     });
 
     test('skips rows with null step_name', async () => {
@@ -232,7 +239,7 @@ describe('workflow-events', () => {
       const result = await getCompletedDagNodeOutputs('run-789');
 
       expect(result.size).toBe(1);
-      expect(result.get('node-a')).toBe('kept');
+      expect(result.get('node-a')).toEqual({ state: 'completed', output: 'kept' });
     });
 
     test('skips rows where node_output is not a string', async () => {
@@ -247,7 +254,7 @@ describe('workflow-events', () => {
       const result = await getCompletedDagNodeOutputs('run-filter');
 
       expect(result.size).toBe(1);
-      expect(result.get('node-c')).toBe('valid');
+      expect(result.get('node-c')).toEqual({ state: 'completed', output: 'valid' });
     });
 
     test('skips corrupt JSON rows without losing other rows', async () => {
@@ -262,8 +269,8 @@ describe('workflow-events', () => {
       const result = await getCompletedDagNodeOutputs('run-corrupt');
 
       expect(result.size).toBe(2);
-      expect(result.get('node-a')).toBe('good first');
-      expect(result.get('node-c')).toBe('good last');
+      expect(result.get('node-a')).toEqual({ state: 'completed', output: 'good first' });
+      expect(result.get('node-c')).toEqual({ state: 'completed', output: 'good last' });
     });
 
     test('returns empty map when no events exist', async () => {

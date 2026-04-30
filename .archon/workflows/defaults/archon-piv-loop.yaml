@@ -16,7 +16,9 @@ description: |
   The PIV loop comes AFTER a PRD exists. Each PIV loop focuses on ONE granular feature or bug fix.
   Input: A description of what to build, a path to an existing plan, or a GitHub issue number.
 
-provider: claude
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
 interactive: true
 
 nodes:
@@ -174,7 +176,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: create-plan
-    model: sonnet
+    model: gpt-5.5
     depends_on: [explore]
     context: fresh
     prompt: |
@@ -411,7 +413,7 @@ nodes:
   - id: implement
     depends_on: [implement-setup]
     idle_timeout: 600000
-    model: claude-opus-4-6[1m]
+    model: gpt-5.5
     loop:
       prompt: |
         # PIV Loop — Implementation Agent
@@ -541,7 +543,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: code-review
-    model: sonnet
+    model: gpt-5.5
     depends_on: [implement]
     context: fresh
     prompt: |
@@ -701,7 +703,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: finalize
-    model: sonnet
+    model: gpt-5.5
     depends_on: [fix-feedback]
     context: fresh
     prompt: |

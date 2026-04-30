@@ -40,6 +40,8 @@ import type {
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
+  ModelReasoningEffort,
+  WebSearchMode,
 } from './schemas';
 import {
   isBashNode,
@@ -128,11 +130,12 @@ export function parseMcpFailureServerNames(message: string): McpFailureEntry[] {
  * failure as plugin noise — is at least observable.
  */
 export async function loadConfiguredMcpServerNames(
-  nodeMcpPath: string | undefined,
+  nodeMcpPath: string | { path: string; optional?: boolean } | undefined,
   cwd: string
 ): Promise<Set<string>> {
-  if (!nodeMcpPath) return new Set();
-  const fullPath = isAbsolute(nodeMcpPath) ? nodeMcpPath : resolvePath(cwd, nodeMcpPath);
+  const mcpPath = typeof nodeMcpPath === 'string' ? nodeMcpPath : nodeMcpPath?.path;
+  if (!mcpPath) return new Set();
+  const fullPath = isAbsolute(mcpPath) ? mcpPath : resolvePath(cwd, mcpPath);
   try {
     const raw = await readFile(fullPath, 'utf-8');
     const parsed: unknown = JSON.parse(raw);
@@ -141,18 +144,20 @@ export async function loadConfiguredMcpServerNames(
     }
     return new Set(Object.keys(parsed as Record<string, unknown>));
   } catch (err) {
-    getLog().debug({ err, nodeMcpPath, fullPath }, 'dag.mcp_filter_config_read_failed');
+    getLog().debug({ err, nodeMcpPath: mcpPath, fullPath }, 'dag.mcp_filter_config_read_failed');
     return new Set();
   }
 }
 
-/** Workflow-level Claude SDK options — per-node overrides take precedence via ?? */
+/** Workflow-level provider options — per-node overrides take precedence via ?? */
 interface WorkflowLevelOptions {
   effort?: EffortLevel;
   thinking?: ThinkingConfig;
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
+  modelReasoningEffort?: ModelReasoningEffort;
+  webSearchMode?: WebSearchMode;
 }
 
 /** Internal node execution result — extends NodeOutput with cost data for aggregation. */
@@ -300,8 +305,7 @@ export function substituteNodeOutputRefs(
         return escapedForBash ? shellQuote(nodeOutput.output) : nodeOutput.output;
       }
       try {
-        const parsed = JSON.parse(nodeOutput.output) as Record<string, unknown>;
-        const value = parsed[field];
+        const value = resolveNodeOutputField(nodeOutput, field);
         if (typeof value === 'string') return escapedForBash ? shellQuote(value) : value;
         // numbers and booleans from JSON.parse are shell-safe without quoting:
         // JSON disallows NaN/Infinity, so String(number) contains only digits, sign, and '.'.
@@ -317,6 +321,73 @@ export function substituteNodeOutputRefs(
       }
     }
   );
+}
+
+function findJsonValueEnd(text: string, startIndex: number): number | undefined {
+  const opener = text[startIndex];
+  const closer = opener === '{' ? '}' : opener === '[' ? ']' : undefined;
+  if (!closer) return undefined;
+
+  const stack: string[] = [closer];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = startIndex + 1; i < text.length; i += 1) {
+    const char = text[i];
+
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+
+    if (char === '"') inString = true;
+    else if (char === '{') stack.push('}');
+    else if (char === '[') stack.push(']');
+    else if (char === stack[stack.length - 1]) {
+      stack.pop();
+      if (stack.length === 0) return i + 1;
+    }
+  }
+
+  return undefined;
+}
+
+function parseNodeOutputJsonObject(output: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Fall through to extracting the first valid JSON object from provider text.
+  }
+
+  for (let i = 0; i < output.length; i += 1) {
+    if (output[i] !== '{') continue;
+    const end = findJsonValueEnd(output, i);
+    if (end === undefined) continue;
+    const parsed = JSON.parse(output.slice(i, end)) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  }
+
+  throw new SyntaxError('Unable to parse node output as JSON object');
+}
+
+function asPlainObject(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function resolveNodeOutputField(nodeOutput: NodeOutput, field: string): unknown {
+  const structured = asPlainObject(nodeOutput.structuredOutput);
+  if (structured) return structured[field];
+  return parseNodeOutputJsonObject(nodeOutput.output)[field];
 }
 
 // buildSDKHooksFromYAML moved to @archon/providers/src/claude/provider.ts
@@ -460,7 +531,15 @@ async function resolveNodeProviderAndModel(
   };
 
   // Pass assistantConfig from config — provider parses internally
-  const assistantConfig = config.assistants[provider] ?? {};
+  const assistantConfig = {
+    ...(config.assistants[provider] ?? {}),
+    ...(provider === workflowProvider && workflowLevelOptions.modelReasoningEffort !== undefined
+      ? { modelReasoningEffort: workflowLevelOptions.modelReasoningEffort }
+      : {}),
+    ...(provider === workflowProvider && workflowLevelOptions.webSearchMode !== undefined
+      ? { webSearchMode: workflowLevelOptions.webSearchMode }
+      : {}),
+  };
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -1167,6 +1246,7 @@ async function executeNodeInternal(
         data: {
           duration_ms: duration,
           node_output: nodeOutputText,
+          ...(structuredOutput !== undefined ? { structured_output: structuredOutput } : {}),
           ...(nodeCostUsd !== undefined ? { cost_usd: nodeCostUsd } : {}),
           ...(nodeStopReason ? { stop_reason: nodeStopReason } : {}),
           ...(nodeNumTurns !== undefined ? { num_turns: nodeNumTurns } : {}),
@@ -1198,6 +1278,7 @@ async function executeNodeInternal(
     return {
       state: 'completed',
       output: nodeOutputText,
+      ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       sessionId: newSessionId,
       costUsd: nodeCostUsd,
     };
@@ -1697,7 +1778,15 @@ function buildLoopNodeOptions(
   if (config.envVars && Object.keys(config.envVars).length > 0) {
     options.env = config.envVars;
   }
-  options.assistantConfig = config.assistants[provider] ?? {};
+  options.assistantConfig = {
+    ...(config.assistants[provider] ?? {}),
+    ...(workflowLevelOptions?.modelReasoningEffort !== undefined
+      ? { modelReasoningEffort: workflowLevelOptions.modelReasoningEffort }
+      : {}),
+    ...(workflowLevelOptions?.webSearchMode !== undefined
+      ? { webSearchMode: workflowLevelOptions.webSearchMode }
+      : {}),
+  };
   // Pass workflow-level options as nodeConfig so providers can apply them
   if (workflowLevelOptions) {
     options.nodeConfig = {
@@ -2494,7 +2583,7 @@ export async function executeDagWorkflow(
   config: WorkflowConfig,
   configuredCommandFolder?: string,
   issueContext?: string,
-  priorCompletedNodes?: Map<string, string>
+  priorCompletedNodes?: Map<string, string | NodeOutput>
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
@@ -2503,6 +2592,8 @@ export async function executeDagWorkflow(
     fallbackModel: workflow.fallbackModel,
     betas: workflow.betas,
     sandbox: workflow.sandbox,
+    modelReasoningEffort: workflow.modelReasoningEffort,
+    webSearchMode: workflow.webSearchMode,
   };
   const layers = buildTopologicalLayers(workflow.nodes);
   const nodeOutputs = new Map<string, NodeOutput>();
@@ -2511,7 +2602,7 @@ export async function executeDagWorkflow(
   // treated as done for trigger-rule and $nodeId.output substitution purposes.
   if (priorCompletedNodes && priorCompletedNodes.size > 0) {
     for (const [nodeId, output] of priorCompletedNodes) {
-      nodeOutputs.set(nodeId, { state: 'completed', output });
+      nodeOutputs.set(nodeId, typeof output === 'string' ? { state: 'completed', output } : output);
     }
     getLog().info(
       { workflowRunId: workflowRun.id, priorCompletedCount: priorCompletedNodes.size },

@@ -9,6 +9,10 @@ description: |
   Optional: Install the remotion-best-practices skill for higher quality output:
             npx skills add remotion-dev/skills
 
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
+
 nodes:
   # ── Layer 0: Check project structure ──────────────────────────────────
   - id: check-project
@@ -125,4 +129,4 @@ nodes:
     depends_on: [render-video]
     allowed_tools:
       - Read
-    model: haiku
+    model: gpt-5.5

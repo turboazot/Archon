@@ -10,8 +10,9 @@ description: |
   This workflow is designed for running in parallel — each instance finds its own free ports
   to avoid conflicts. Produces artifacts in $ARTIFACTS_DIR/ and posts a validation report.
 
-provider: claude
-model: opus
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
@@ -117,7 +118,7 @@ nodes:
       Consider: even if a change is backend, if it affects what the frontend displays
       (e.g., API response format changes, SSE event changes), it IS e2e_testable.
     depends_on: [fetch-pr]
-    model: haiku
+    model: gpt-5.5
     allowed_tools: []
     output_format:
       type: object

@@ -23,6 +23,73 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+function findJsonValueEnd(text: string, startIndex: number): number | undefined {
+  const opener = text[startIndex];
+  const closer = opener === '{' ? '}' : opener === '[' ? ']' : undefined;
+  if (!closer) return undefined;
+
+  const stack: string[] = [closer];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = startIndex + 1; i < text.length; i += 1) {
+    const char = text[i];
+
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+
+    if (char === '"') inString = true;
+    else if (char === '{') stack.push('}');
+    else if (char === '[') stack.push(']');
+    else if (char === stack[stack.length - 1]) {
+      stack.pop();
+      if (stack.length === 0) return i + 1;
+    }
+  }
+
+  return undefined;
+}
+
+function parseNodeOutputJsonObject(output: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Fall through to extracting the first valid JSON object from provider text.
+  }
+
+  for (let i = 0; i < output.length; i += 1) {
+    if (output[i] !== '{') continue;
+    const end = findJsonValueEnd(output, i);
+    if (end === undefined) continue;
+    const parsed = JSON.parse(output.slice(i, end)) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  }
+
+  throw new SyntaxError('Unable to parse node output as JSON object');
+}
+
+function asPlainObject(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function resolveNodeOutputField(nodeOutput: NodeOutput, field: string): unknown {
+  const structured = asPlainObject(nodeOutput.structuredOutput);
+  if (structured) return structured[field];
+  return parseNodeOutputJsonObject(nodeOutput.output)[field];
+}
+
 /**
  * Resolve a `$nodeId.output` or `$nodeId.output.field` reference to a string value.
  * Returns empty string if the node output is not found (logs warn), if the output is
@@ -38,14 +105,13 @@ function resolveOutputRef(
     getLog().warn({ nodeId }, 'condition_output_ref_unknown_node');
     return '';
   }
-  if (!nodeOutput.output) return '';
-
   if (!field) return nodeOutput.output;
+
+  if (!nodeOutput.output && nodeOutput.structuredOutput === undefined) return '';
 
   // Dot notation: parse JSON and access field
   try {
-    const parsed = JSON.parse(nodeOutput.output) as Record<string, unknown>;
-    const value = parsed[field];
+    const value = resolveNodeOutputField(nodeOutput, field);
     if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'boolean') return String(value);
     return ''; // objects, null, undefined, symbol, bigint → empty

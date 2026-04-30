@@ -1,0 +1,176 @@
+name: archon-fix-github-issue-simple
+description: |
+  Use when: User wants a lightweight implementation workflow for a GitHub issue.
+  Triggers: "simple fix issue", "quick implement issue", "implement issue simply",
+            "fix issue simple", "lightweight issue fix".
+  Does: Fetches issue context -> checks out the requested branch -> creates an implementation
+        plan -> implements tasks -> validates -> creates a PR -> self-reviews -> merges
+        only when the issue opted into auto-merge and the review passes.
+  NOT for: Full autonomous review/self-fix loops (use archon-fix-github-issue),
+           PR-only review, planning without implementation, or tiny harness marker tests.
+
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
+
+nodes:
+  - id: extract-issue-number
+    prompt: |
+      Find the GitHub issue number for this request.
+
+      Request: $ARGUMENTS
+
+      Rules:
+      - If the message contains an explicit issue number (e.g., "#123", "issue 123", "123"), extract that number.
+      - If the message is ambiguous, use `gh issue list` to search for matching issues and pick the best match.
+
+      CRITICAL: Your final output must be ONLY the bare number with no quotes, no markdown, no explanation.
+      Example correct output: 123
+
+  - id: fetch-issue
+    bash: |
+      set -euo pipefail
+
+      ISSUE_NUM=$(echo "$extract-issue-number.output" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
+      if [ -z "$ISSUE_NUM" ]; then
+        echo "Failed to extract issue number from: $extract-issue-number.output" >&2
+        exit 1
+      fi
+
+      echo "$ISSUE_NUM" > "$ARTIFACTS_DIR/.issue-number"
+      gh issue view "$ISSUE_NUM" --json number,title,body,labels,comments,state,url,author
+    depends_on: [extract-issue-number]
+
+  - id: prepare-branch
+    bash: |
+      set -euo pipefail
+
+      REQUEST=$(cat <<'EOF'
+      $ARGUMENTS
+      EOF
+      )
+
+      BRANCH=$(printf '%s\n' "$REQUEST" | grep -oE 'Use branch: [^[:space:]]+' | head -1 | sed -E 's/^Use branch: //')
+      if [ -z "$BRANCH" ]; then
+        echo "Missing required Use branch field" >&2
+        exit 1
+      fi
+
+      case "$BRANCH" in
+        archon-e2e/*|fix/*|feature/*|bugfix/*|chore/*) ;;
+        *)
+          echo "Refusing unsafe branch name: $BRANCH" >&2
+          exit 1
+          ;;
+      esac
+
+      BASE="${BASE_BRANCH:-main}"
+      git fetch origin "$BASE" --quiet
+      git checkout -B "$BRANCH" "origin/$BASE"
+      echo "$BRANCH" > "$ARTIFACTS_DIR/.expected-branch"
+      echo "Prepared branch $BRANCH from origin/$BASE"
+    depends_on: [fetch-issue]
+
+  - id: create-plan
+    command: archon-create-plan
+    depends_on: [prepare-branch]
+    context: fresh
+
+  - id: plan-setup
+    command: archon-plan-setup
+    depends_on: [create-plan]
+    context: fresh
+
+  - id: confirm-plan
+    command: archon-confirm-plan
+    depends_on: [plan-setup]
+    context: fresh
+
+  - id: implement-tasks
+    command: archon-implement-tasks
+    depends_on: [confirm-plan]
+    context: fresh
+    model: gpt-5.5
+
+  - id: validate
+    command: archon-validate
+    depends_on: [implement-tasks]
+    context: fresh
+
+  - id: finalize-pr
+    command: archon-finalize-pr
+    depends_on: [validate]
+    context: fresh
+
+  - id: self-review
+    depends_on: [finalize-pr]
+    bash: |
+      set -euo pipefail
+
+      ISSUE_NUM=$(cat "$ARTIFACTS_DIR/.issue-number")
+      EXPECTED_BRANCH=$(cat "$ARTIFACTS_DIR/.expected-branch")
+      PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
+
+      PR_JSON=$(gh pr view "$PR_NUMBER" --json number,headRefName,isDraft,state,files,url)
+      HEAD_BRANCH=$(printf '%s' "$PR_JSON" | jq -r '.headRefName')
+      IS_DRAFT=$(printf '%s' "$PR_JSON" | jq -r '.isDraft')
+      PR_STATE=$(printf '%s' "$PR_JSON" | jq -r '.state')
+      FILE_COUNT=$(printf '%s' "$PR_JSON" | jq '.files | length')
+      PR_URL=$(printf '%s' "$PR_JSON" | jq -r '.url')
+
+      if [ "$HEAD_BRANCH" != "$EXPECTED_BRANCH" ]; then
+        echo "PR head branch mismatch: expected $EXPECTED_BRANCH, got $HEAD_BRANCH" >&2
+        exit 1
+      fi
+
+      if [ "$IS_DRAFT" != "false" ] || [ "$PR_STATE" != "OPEN" ]; then
+        echo "PR #$PR_NUMBER is not an open non-draft PR" >&2
+        exit 1
+      fi
+
+      if [ "$FILE_COUNT" -lt 1 ]; then
+        echo "PR #$PR_NUMBER has no changed files" >&2
+        exit 1
+      fi
+
+      if ! grep -Eq 'ALL_PASS|Pass|passes|passed' "$ARTIFACTS_DIR/validation.md"; then
+        echo "Validation artifact does not show a passing result" >&2
+        exit 1
+      fi
+
+      {
+        echo "# Simple Issue Self Review"
+        echo
+        echo "- Issue: #$ISSUE_NUM"
+        echo "- PR: #$PR_NUMBER"
+        echo "- URL: $PR_URL"
+        echo "- Result: passed"
+        echo "- Checked expected branch: $EXPECTED_BRANCH"
+        echo "- Checked changed file count: $FILE_COUNT"
+        echo "- Checked validation artifact: $ARTIFACTS_DIR/validation.md"
+      } > "$ARTIFACTS_DIR/self-review.md"
+
+      gh pr comment "$PR_NUMBER" --body "Archon simple issue self-review passed: validation artifact is green and PR scope is non-empty."
+      echo "Self-review passed for PR #$PR_NUMBER"
+
+  - id: merge-if-auto
+    depends_on: [self-review]
+    bash: |
+      set -euo pipefail
+
+      ISSUE_NUM=$(cat "$ARTIFACTS_DIR/.issue-number")
+      PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
+
+      if ! gh issue view "$ISSUE_NUM" --json labels --jq '.labels[].name' | grep -qx 'archon:auto-merge'; then
+        echo "Issue #$ISSUE_NUM is not labeled archon:auto-merge; leaving PR #$PR_NUMBER open."
+        exit 0
+      fi
+
+      if [ "${ARCHON_E2E_ALLOW_MERGE:-}" != "1" ]; then
+        echo "Refusing auto-merge without ARCHON_E2E_ALLOW_MERGE=1" >&2
+        exit 1
+      fi
+
+      gh pr merge "$PR_NUMBER" --squash
+      gh issue close "$ISSUE_NUM" --comment "Closed after Archon simple workflow self-review and merge of PR #$PR_NUMBER."
+      echo "Merged PR #$PR_NUMBER and closed issue #$ISSUE_NUM"

@@ -5,6 +5,10 @@ description: |
   Capability: Full Claude Code agent with all tools available.
   Note: Will inform user when assist mode is used for tracking.
 
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
+
 nodes:
   - id: assist
     command: archon-assist

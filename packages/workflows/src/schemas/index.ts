@@ -50,6 +50,7 @@ export {
   LOOP_NODE_AI_FIELDS,
   effortLevelSchema,
   thinkingConfigSchema,
+  mcpConfigSchema,
   sandboxSettingsSchema,
   agentDefinitionSchema,
 } from './dag-node';
@@ -67,6 +68,7 @@ export type {
   DagNode,
   EffortLevel,
   ThinkingConfig,
+  McpConfig,
   SandboxSettings,
   AgentDefinition,
 } from './dag-node';

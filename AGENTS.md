@@ -1,0 +1,1 @@
+- read CLAUDE.md once to understand context

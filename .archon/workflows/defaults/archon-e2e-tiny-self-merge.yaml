@@ -1,0 +1,164 @@
+name: archon-e2e-tiny-self-merge
+description: |
+  Use when: Running the Archon harness live E2E smoke test with autonomous PR review and merge.
+  Does: Creates one scoped archon-e2e artifact file, opens one PR, performs a deterministic self-review, and merges when the review passes.
+  NOT for: Real issue fixing, broad code review, planning, research, or production changes.
+
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: low
+
+nodes:
+  - id: prepare
+    bash: |
+      set -euo pipefail
+
+      REQUEST=$(cat <<'EOF'
+      $ARGUMENTS
+      EOF
+      )
+
+      SESSION=$(printf '%s\n' "$REQUEST" | grep -oE '\[archon-e2e:[^]]+\]' | head -1 | sed -E 's/^\[archon-e2e:([^]]+)\]$/\1/')
+      ISSUE_NUM=$(printf '%s\n' "$REQUEST" | grep -oE 'Issue: #[0-9]+' | head -1 | grep -oE '[0-9]+')
+      BRANCH=$(printf '%s\n' "$REQUEST" | grep -oE 'Use branch: [^[:space:]]+' | head -1 | sed -E 's/^Use branch: //')
+
+      if [ -z "$SESSION" ] || [ -z "$ISSUE_NUM" ] || [ -z "$BRANCH" ]; then
+        echo "Failed to parse required E2E fields" >&2
+        echo "SESSION=$SESSION ISSUE_NUM=$ISSUE_NUM BRANCH=$BRANCH" >&2
+        exit 1
+      fi
+
+      case "$BRANCH" in
+        archon-e2e/*) ;;
+        *)
+          echo "Refusing non-E2E branch: $BRANCH" >&2
+          exit 1
+          ;;
+      esac
+
+      ARTIFACT_FILE="archon-e2e/${SESSION}-${ISSUE_NUM}.md"
+      mkdir -p "$ARTIFACTS_DIR"
+      {
+        echo "SESSION=$SESSION"
+        echo "ISSUE_NUM=$ISSUE_NUM"
+        echo "BRANCH=$BRANCH"
+        echo "ARTIFACT_FILE=$ARTIFACT_FILE"
+      } > "$ARTIFACTS_DIR/e2e.env"
+
+      echo "Prepared self-merge E2E smoke for issue #$ISSUE_NUM on $BRANCH"
+
+  - id: implement
+    depends_on: [prepare]
+    bash: |
+      set -euo pipefail
+      . "$ARTIFACTS_DIR/e2e.env"
+
+      BASE="${BASE_BRANCH:-main}"
+      git fetch origin "$BASE" --quiet
+      git checkout -B "$BRANCH" "origin/$BASE"
+
+      mkdir -p "$(dirname "$ARTIFACT_FILE")"
+      echo "Archon E2E self-merge smoke test ${SESSION} issue ${ISSUE_NUM} completed." > "$ARTIFACT_FILE"
+
+      git add "$ARTIFACT_FILE"
+      git commit -m "test: add Archon E2E self-merge marker"
+
+      {
+        echo "# E2E Implementation"
+        echo
+        echo "- Issue: #$ISSUE_NUM"
+        echo "- Branch: $BRANCH"
+        echo "- File: $ARTIFACT_FILE"
+      } > "$ARTIFACTS_DIR/implementation.md"
+
+  - id: create-pr
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      . "$ARTIFACTS_DIR/e2e.env"
+
+      BASE="${BASE_BRANCH:-main}"
+      git push -u origin "$BRANCH"
+
+      EXISTING_PR=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number // empty')
+      if [ -n "$EXISTING_PR" ]; then
+        PR_NUMBER="$EXISTING_PR"
+      else
+        BODY=$(cat <<EOF
+      ## Summary
+      - Adds one disposable Archon E2E self-merge marker file.
+      - Session: \`${SESSION}\`
+      - File: \`${ARTIFACT_FILE}\`
+
+      ## Validation
+      - Created by \`archon-e2e-tiny-self-merge\`.
+      - Scoped to \`archon-e2e\`.
+
+      Closes #${ISSUE_NUM}
+      EOF
+      )
+        gh pr create \
+          --base "$BASE" \
+          --head "$BRANCH" \
+          --title "test: add Archon E2E self-merge marker" \
+          --body "$BODY"
+        PR_NUMBER=$(gh pr view --json number -q '.number')
+      fi
+
+      PR_URL=$(gh pr view "$PR_NUMBER" --json url -q '.url')
+      echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
+      echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
+      echo "Created PR #$PR_NUMBER: $PR_URL"
+
+  - id: self-review
+    depends_on: [create-pr]
+    bash: |
+      set -euo pipefail
+      . "$ARTIFACTS_DIR/e2e.env"
+
+      PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
+      CHANGED_FILES=$(gh pr view "$PR_NUMBER" --json files --jq '.files[].path')
+      FILE_COUNT=$(printf '%s\n' "$CHANGED_FILES" | sed '/^$/d' | wc -l | tr -d ' ')
+      EXPECTED_FILE="$ARTIFACT_FILE"
+
+      if [ "$FILE_COUNT" != "1" ]; then
+        echo "Expected exactly one changed file, found $FILE_COUNT" >&2
+        printf '%s\n' "$CHANGED_FILES" >&2
+        exit 1
+      fi
+
+      if [ "$CHANGED_FILES" != "$EXPECTED_FILE" ]; then
+        echo "Unexpected changed file: $CHANGED_FILES, expected: $EXPECTED_FILE" >&2
+        exit 1
+      fi
+
+      if ! grep -q "$SESSION" "$EXPECTED_FILE"; then
+        echo "Marker file does not include session id $SESSION" >&2
+        exit 1
+      fi
+
+      {
+        echo "# E2E Self Review"
+        echo
+        echo "- PR: #$PR_NUMBER"
+        echo "- Result: passed"
+        echo "- Checked file scope: $EXPECTED_FILE"
+        echo "- Checked session marker: $SESSION"
+      } > "$ARTIFACTS_DIR/self-review.md"
+
+      gh pr comment "$PR_NUMBER" --body "Archon E2E self-review passed: one scoped marker file changed."
+      echo "Self-review passed for PR #$PR_NUMBER"
+
+  - id: merge-pr
+    depends_on: [self-review]
+    bash: |
+      set -euo pipefail
+
+      if [ "${ARCHON_E2E_ALLOW_MERGE:-}" != "1" ]; then
+        echo "Refusing self-merge without ARCHON_E2E_ALLOW_MERGE=1" >&2
+        exit 1
+      fi
+
+      PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
+      gh pr merge "$PR_NUMBER" --squash
+      echo "Merged PR #$PR_NUMBER"

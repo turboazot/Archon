@@ -11,6 +11,10 @@ description: |
   Reproduction gating: If the issue cannot be reproduced, the workflow does NOT create an issue.
   Instead, it reports what was tried and suggests next steps to the user.
 
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
+
 nodes:
   # ═══════════════════════════════════════════════════════════════
   # PHASE 1: CLASSIFY — Haiku classification of user's problem
@@ -49,7 +53,7 @@ nodes:
         If no explicit steps given, infer the most likely way to trigger the issue.
 
       Provide reasoning for your classification.
-    model: haiku
+    model: gpt-5.5
     allowed_tools: []
     output_format:
       type: object

@@ -380,6 +380,29 @@ describe('dagNodeSchema — new Claude SDK options', () => {
       expect((result.data as PromptNode).systemPrompt).toBe('You are a security reviewer');
   });
 
+  test('normalizes string MCP config to object form', () => {
+    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', mcp: 'mcp.json' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as PromptNode).mcp).toEqual({ path: 'mcp.json', optional: false });
+    }
+  });
+
+  test('accepts optional MCP config object', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      mcp: { path: '.archon/mcp/ntfy.json', optional: true },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as PromptNode).mcp).toEqual({
+        path: '.archon/mcp/ntfy.json',
+        optional: true,
+      });
+    }
+  });
+
   test('rejects empty systemPrompt string', () => {
     const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', systemPrompt: '' });
     expect(result.success).toBe(false);

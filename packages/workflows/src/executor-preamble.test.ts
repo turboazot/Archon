@@ -6,7 +6,7 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import type { WorkflowDefinition, WorkflowRun } from './schemas';
+import type { WorkflowDefinition, WorkflowRun, NodeOutput } from './schemas';
 
 // ---------------------------------------------------------------------------
 // Mock logger (must precede all module-under-test imports)
@@ -96,7 +96,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
     createWorkflowEvent: mock(async () => {}),
     findResumableRun: mock(async () => null),
-    getCompletedDagNodeOutputs: mock(async () => new Map<string, string>()),
+    getCompletedDagNodeOutputs: mock(async () => new Map<string, NodeOutput>()),
     resumeWorkflowRun: mock(async () => makeRun()),
     getCodebase: mock(async () => null),
     getCodebaseEnvVars: mock(async () => ({})),
@@ -397,7 +397,9 @@ describe('executeWorkflow preamble', () => {
 
     it('returns error when DAG resumeWorkflowRun throws', async () => {
       const failedRun = makeRun({ id: 'prior-run', status: 'failed' });
-      const priorNodes = new Map([['node1', 'output1']]);
+      const priorNodes = new Map<string, NodeOutput>([
+        ['node1', { state: 'completed', output: 'output1' }],
+      ]);
       const store = makeStore({
         findResumableRun: mock(async () => failedRun),
         getCompletedDagNodeOutputs: mock(async () => priorNodes),

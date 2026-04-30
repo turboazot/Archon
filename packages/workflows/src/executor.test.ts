@@ -63,7 +63,7 @@ registerBuiltinProviders();
 import { executeWorkflow } from './executor';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import type { WorkflowDefinition, WorkflowRun } from './schemas';
+import type { WorkflowDefinition, WorkflowRun, NodeOutput } from './schemas';
 
 // --- Helpers ---
 
@@ -381,7 +381,10 @@ describe('executeWorkflow', () => {
       const updateSpy = mock(async () => {});
       const store = makeStore({
         findResumableRun: mock(async () => resumable),
-        getCompletedDagNodeOutputs: mock(async () => new Map([['node1', 'output1']])),
+        getCompletedDagNodeOutputs: mock(
+          async () =>
+            new Map<string, NodeOutput>([['node1', { state: 'completed', output: 'output1' }]])
+        ),
         resumeWorkflowRun: mock(async () => makeRun({ id: 'failed-prior-run', status: 'running' })),
         updateWorkflowRun: updateSpy,
       });
@@ -420,7 +423,10 @@ describe('executeWorkflow', () => {
       });
       const store = makeStore({
         findResumableRun: mock(async () => resumable),
-        getCompletedDagNodeOutputs: mock(async () => new Map([['node1', 'output1']])),
+        getCompletedDagNodeOutputs: mock(
+          async () =>
+            new Map<string, NodeOutput>([['node1', { state: 'completed', output: 'output1' }]])
+        ),
         resumeWorkflowRun: mock(async () => makeRun({ id: 'failed-prior-run', status: 'running' })),
         updateWorkflowRun: updateSpy,
       });
@@ -643,7 +649,9 @@ describe('executeWorkflow', () => {
 
     it('returns error when resumeWorkflowRun throws', async () => {
       const failedRun = makeRun({ id: 'prior-run', status: 'failed' });
-      const priorNodes = new Map([['node1', 'output1']]);
+      const priorNodes = new Map<string, NodeOutput>([
+        ['node1', { state: 'completed', output: 'output1' }],
+      ]);
       const store = makeStore({
         findResumableRun: mock(async () => failedRun),
         getCompletedDagNodeOutputs: mock(async () => priorNodes),
@@ -813,7 +821,10 @@ describe('executeWorkflow', () => {
       const updateSpy = mock(async () => {});
       const store = makeStore({
         findResumableRun: mock(async () => resumable),
-        getCompletedDagNodeOutputs: mock(async () => new Map([['node1', 'out1']])),
+        getCompletedDagNodeOutputs: mock(
+          async () =>
+            new Map<string, NodeOutput>([['node1', { state: 'completed', output: 'out1' }]])
+        ),
         resumeWorkflowRun: mock(async () => {
           throw new Error('DB blew up during resume activation');
         }),

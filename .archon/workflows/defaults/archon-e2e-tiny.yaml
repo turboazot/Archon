@@ -1,0 +1,112 @@
+name: archon-e2e-tiny
+description: |
+  Use when: Running the Archon harness live E2E smoke test.
+  Does: Creates one scoped archon-e2e artifact file, pushes one branch, and opens one draft PR.
+  NOT for: Real issue fixing, code review, planning, research, or production changes.
+
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: low
+
+nodes:
+  - id: prepare
+    bash: |
+      set -euo pipefail
+
+      REQUEST=$(cat <<'EOF'
+      $ARGUMENTS
+      EOF
+      )
+
+      SESSION=$(printf '%s\n' "$REQUEST" | grep -oE '\[archon-e2e:[^]]+\]' | head -1 | sed -E 's/^\[archon-e2e:([^]]+)\]$/\1/')
+      ISSUE_NUM=$(printf '%s\n' "$REQUEST" | grep -oE 'Issue: #[0-9]+' | head -1 | grep -oE '[0-9]+')
+      BRANCH=$(printf '%s\n' "$REQUEST" | grep -oE 'Use branch: [^[:space:]]+' | head -1 | sed -E 's/^Use branch: //')
+
+      if [ -z "$SESSION" ] || [ -z "$ISSUE_NUM" ] || [ -z "$BRANCH" ]; then
+        echo "Failed to parse required E2E fields" >&2
+        echo "SESSION=$SESSION ISSUE_NUM=$ISSUE_NUM BRANCH=$BRANCH" >&2
+        exit 1
+      fi
+
+      case "$BRANCH" in
+        archon-e2e/*) ;;
+        *)
+          echo "Refusing non-E2E branch: $BRANCH" >&2
+          exit 1
+          ;;
+      esac
+
+      ARTIFACT_FILE="archon-e2e/${SESSION}.md"
+      mkdir -p "$ARTIFACTS_DIR"
+      {
+        echo "SESSION=$SESSION"
+        echo "ISSUE_NUM=$ISSUE_NUM"
+        echo "BRANCH=$BRANCH"
+        echo "ARTIFACT_FILE=$ARTIFACT_FILE"
+      } > "$ARTIFACTS_DIR/e2e.env"
+
+      echo "Prepared E2E smoke for issue #$ISSUE_NUM on $BRANCH"
+
+  - id: implement
+    depends_on: [prepare]
+    bash: |
+      set -euo pipefail
+      . "$ARTIFACTS_DIR/e2e.env"
+
+      BASE="${BASE_BRANCH:-main}"
+      git fetch origin "$BASE" --quiet
+      git checkout -B "$BRANCH" "origin/$BASE"
+
+      mkdir -p "$(dirname "$ARTIFACT_FILE")"
+      echo "Archon E2E smoke test ${SESSION} completed." > "$ARTIFACT_FILE"
+
+      git add "$ARTIFACT_FILE"
+      git commit -m "test: add Archon E2E smoke marker"
+
+      {
+        echo "# E2E Implementation"
+        echo
+        echo "- Issue: #$ISSUE_NUM"
+        echo "- Branch: $BRANCH"
+        echo "- File: $ARTIFACT_FILE"
+      } > "$ARTIFACTS_DIR/implementation.md"
+
+  - id: create-pr
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      . "$ARTIFACTS_DIR/e2e.env"
+
+      BASE="${BASE_BRANCH:-main}"
+      git push -u origin "$BRANCH"
+
+      EXISTING_PR=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number // empty')
+      if [ -n "$EXISTING_PR" ]; then
+        PR_NUMBER="$EXISTING_PR"
+      else
+        BODY=$(cat <<EOF
+      ## Summary
+      - Adds one disposable Archon E2E smoke marker file.
+      - Session: \`${SESSION}\`
+      - File: \`${ARTIFACT_FILE}\`
+
+      ## Validation
+      - Created by \`archon-e2e-tiny\`.
+      - Scoped to \`archon-e2e\`.
+
+      Closes #${ISSUE_NUM}
+      EOF
+      )
+        gh pr create \
+          --draft \
+          --base "$BASE" \
+          --head "$BRANCH" \
+          --title "test: add Archon E2E smoke marker" \
+          --body "$BODY"
+        PR_NUMBER=$(gh pr view --json number -q '.number')
+      fi
+
+      PR_URL=$(gh pr view "$PR_NUMBER" --json url -q '.url')
+      echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
+      echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
+      echo "Created PR #$PR_NUMBER: $PR_URL"

@@ -171,7 +171,7 @@ export interface AgentRequestOptions {
  * Providers translate fields they understand; unknown fields are ignored.
  */
 export interface NodeConfig {
-  mcp?: string;
+  mcp?: string | { path: string; optional?: boolean };
   hooks?: unknown;
   skills?: string[];
   /**

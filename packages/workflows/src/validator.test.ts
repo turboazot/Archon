@@ -177,6 +177,19 @@ describe('validateWorkflowResources — MCP validation', () => {
     expect(issues.some(i => i.field === 'mcp' && i.level === 'error')).toBe(true);
   });
 
+  test('no issue when optional MCP config file is missing', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'step1',
+        prompt: 'do stuff',
+        mcp: { path: 'missing.json', optional: true },
+      } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.some(i => i.field === 'mcp' && i.level === 'error')).toBe(false);
+    expect(issues.some(i => i.field === 'mcp')).toBe(false);
+  });
+
   test('error when MCP config has invalid JSON', async () => {
     const mcpPath = join(tmpDir, 'bad.json');
     await writeFile(mcpPath, '{bad json');
@@ -212,7 +225,7 @@ describe('validateWorkflowResources — MCP validation', () => {
     expect(mcpErrors).toHaveLength(0);
   });
 
-  test('warns when MCP used with codex provider', async () => {
+  test('does not warn when MCP used with codex provider', async () => {
     const mcpPath = join(tmpDir, 'good.json');
     await writeFile(mcpPath, '{"server": {"command": "npx"}}');
     const workflow = makeWorkflow(
@@ -222,8 +235,7 @@ describe('validateWorkflowResources — MCP validation', () => {
     );
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const mcpWarnings = issues.filter(i => i.field === 'mcp' && i.level === 'warning');
-    expect(mcpWarnings).toHaveLength(1);
-    expect(mcpWarnings[0].message).toContain('not supported by provider');
+    expect(mcpWarnings).toHaveLength(0);
   });
 });
 

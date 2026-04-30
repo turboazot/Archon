@@ -16,6 +16,10 @@ description: |
 
   NOT for: Creating plans from scratch (use archon-idea-to-pr), quick fixes, standalone reviews.
 
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
+
 nodes:
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 1: SETUP
@@ -42,7 +46,7 @@ nodes:
     command: archon-implement-tasks
     depends_on: [confirm-plan]
     context: fresh
-    model: opus[1m]
+    model: gpt-5.5
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 4: VALIDATE

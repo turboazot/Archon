@@ -15,7 +15,9 @@ description: |
   - PostToolUse hooks force type-check after every file change
   - Behavior verification confirms no logic changes after refactoring
 
-provider: claude
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
@@ -207,7 +209,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: execute-refactor
-    model: opus[1m]
+    model: gpt-5.5
     prompt: |
       You are executing a refactoring plan with strict safety guardrails.
 

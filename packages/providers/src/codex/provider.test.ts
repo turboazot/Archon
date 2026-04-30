@@ -1,4 +1,7 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { mkdtemp, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -72,7 +75,7 @@ describe('CodexProvider', () => {
       const caps = client.getCapabilities();
       expect(caps).toEqual({
         sessionResume: true,
-        mcp: false,
+        mcp: true,
         hooks: false,
         skills: false,
         agents: false,
@@ -657,7 +660,54 @@ describe('CodexProvider', () => {
       );
     });
 
-    test('passes outputFormat schema as outputSchema in TurnOptions', async () => {
+    test('passes workflow MCP config as Codex CLI config override', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'codex-mcp-test-'));
+      const mcpPath = join(dir, 'mcp.json');
+      process.env.CODEX_TEST_MCP_TOKEN = 'secret-token';
+      await writeFile(
+        mcpPath,
+        JSON.stringify({
+          ntfy: {
+            command: 'node',
+            args: ['server.js', '--stdio'],
+            env: { TOKEN: '$CODEX_TEST_MCP_TOKEN' },
+          },
+        })
+      );
+
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+        nodeConfig: { mcp: { path: mcpPath, optional: true } },
+      })) {
+        // consume
+      }
+
+      expect(MockCodex).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: {
+            mcp_servers: {
+              ntfy: {
+                command: 'node',
+                args: ['server.js', '--stdio'],
+                env: { TOKEN: 'secret-token' },
+              },
+            },
+          },
+        })
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ serverNames: ['ntfy'], mcpPath }),
+        'codex.mcp_config_loaded'
+      );
+      delete process.env.CODEX_TEST_MCP_TOKEN;
+    });
+
+    test('passes Codex-normalized outputFormat schema as outputSchema in TurnOptions', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield { type: 'turn.completed', usage: defaultUsage };
@@ -666,8 +716,14 @@ describe('CodexProvider', () => {
 
       const schema = {
         type: 'object',
-        properties: { summary: { type: 'string' } },
-        required: ['summary'],
+        properties: {
+          summary: { type: 'string' },
+          metadata: {
+            type: 'object',
+            properties: { confidence: { type: 'number' } },
+          },
+        },
+        required: ['summary', 'metadata'],
       };
 
       const chunks = [];
@@ -679,7 +735,21 @@ describe('CodexProvider', () => {
 
       expect(mockRunStreamed).toHaveBeenCalledWith(
         'test prompt',
-        expect.objectContaining({ outputSchema: schema })
+        expect.objectContaining({
+          outputSchema: {
+            type: 'object',
+            properties: {
+              summary: { type: 'string' },
+              metadata: {
+                type: 'object',
+                properties: { confidence: { type: 'number' } },
+                additionalProperties: false,
+              },
+            },
+            required: ['summary', 'metadata'],
+            additionalProperties: false,
+          },
+        })
       );
     });
 
@@ -1235,6 +1305,106 @@ describe('CodexProvider', () => {
         expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
           jsonPayload
         );
+        expect(chunks.some(c => c.type === 'assistant')).toBe(false);
+      });
+
+      test('extracts structuredOutput from fenced JSON', async () => {
+        const jsonPayload = { status: 'ok', count: 7 };
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: {
+                type: 'agent_message',
+                id: 'msg-1',
+                text: `\`\`\`json\n${JSON.stringify(jsonPayload)}\n\`\`\``,
+              },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
+          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+        })) {
+          chunks.push(chunk);
+        }
+
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
+          jsonPayload
+        );
+      });
+
+      test('extracts structuredOutput from prose-wrapped JSON', async () => {
+        const jsonPayload = {
+          input_type: 'needs_generation',
+          prd_dir: '.archon/ralph/ecommerce-products-catalogs',
+        };
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: {
+                type: 'agent_message',
+                id: 'msg-1',
+                text: `I checked the repo. Result:\n${JSON.stringify(jsonPayload)}\nDone.`,
+              },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
+          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+        })) {
+          chunks.push(chunk);
+        }
+
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
+          jsonPayload
+        );
+        expect(chunks.some(c => c.type === 'system')).toBe(false);
+      });
+
+      test('extracts structuredOutput from JSON with trailing fence marker without warning', async () => {
+        const jsonPayload = {
+          input_type: 'needs_generation',
+          prd_dir: '.archon/ralph/ecommerce-products-catalogs',
+        };
+        mockRunStreamed.mockResolvedValueOnce({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: {
+                type: 'agent_message',
+                id: 'msg-1',
+                text: `${JSON.stringify(jsonPayload)}\n\`\`\``,
+              },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
+          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+        })) {
+          chunks.push(chunk);
+        }
+
+        const resultChunk = chunks.find(c => c.type === 'result');
+        expect(resultChunk).toBeDefined();
+        expect(resultChunk!.type === 'result' && resultChunk!.structuredOutput).toEqual(
+          jsonPayload
+        );
+        expect(chunks.some(c => c.type === 'system')).toBe(false);
+        expect(chunks.some(c => c.type === 'assistant')).toBe(false);
       });
 
       test('yields system warning when outputFormat is set but text is not valid JSON', async () => {

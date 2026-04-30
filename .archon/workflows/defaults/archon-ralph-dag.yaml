@@ -12,7 +12,9 @@ description: |
 
   Accepts: An idea description, a path to an existing prd.md, or a directory with prd.md + prd.json
 
-provider: claude
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
@@ -21,7 +23,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: detect-input
-    model: haiku
+    model: gpt-5.5
     prompt: |
       # Detect Ralph Input
 
@@ -189,7 +191,7 @@ nodes:
   - id: implement
     depends_on: [validate-prd]
     idle_timeout: 600000
-    model: opus[1m]
+    model: gpt-5.5
     loop:
       prompt: |
         # Ralph Agent — Autonomous Story Implementation

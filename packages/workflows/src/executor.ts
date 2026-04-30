@@ -8,7 +8,12 @@ import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, BUNDLED_VERSION } from '@archon/paths';
 import { getDefaultBranch, toRepoPath } from '@archon/git';
-import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
+import type {
+  WorkflowDefinition,
+  WorkflowRun,
+  WorkflowExecutionResult,
+  NodeOutput,
+} from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
@@ -307,7 +312,7 @@ export async function executeWorkflow(
   }
 
   // Resume detection and concurrent-run checks
-  let dagPriorCompletedNodes: Map<string, string> | undefined;
+  let dagPriorCompletedNodes: Map<string, NodeOutput> | undefined;
   let workflowRun: WorkflowRun | undefined = preCreatedRun;
 
   // Resume detection: check for prior failed run on same workflow + worktree
@@ -334,7 +339,7 @@ export async function executeWorkflow(
     // Step 2: Activate the resume — propagate as error if this fails
     if (resumableRun) {
       // Load completed node outputs from the prior run's events.
-      let priorNodes: Map<string, string>;
+      let priorNodes: Map<string, NodeOutput>;
       try {
         priorNodes = await deps.store.getCompletedDagNodeOutputs(resumableRun.id);
       } catch (error) {

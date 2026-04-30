@@ -2,8 +2,11 @@
  * Codex SDK wrapper
  * Provides async generator interface for streaming Codex responses
  */
+import { readFile } from 'fs/promises';
+import { isAbsolute, resolve } from 'path';
 import {
   Codex,
+  type CodexOptions,
   type ThreadOptions,
   type TurnOptions,
   type TurnCompletedEvent,
@@ -87,6 +90,249 @@ function buildCodexEnv(requestEnv: Record<string, string>): Record<string, strin
   return { ...baseEnv, ...requestEnv };
 }
 
+type CodexConfigValue = string | number | boolean | CodexConfigValue[] | CodexConfigObject;
+interface CodexConfigObject {
+  [key: string]: CodexConfigValue;
+}
+
+interface CodexProviderWarning {
+  code: string;
+  message: string;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function schemaAllowsObject(schema: Record<string, unknown>): boolean {
+  const type = schema.type;
+  return (
+    type === 'object' ||
+    (Array.isArray(type) && type.includes('object')) ||
+    isPlainRecord(schema.properties)
+  );
+}
+
+/**
+ * Codex/OpenAI structured output schemas require every object node to declare
+ * `additionalProperties: false`. Workflow YAML is intentionally concise, so we
+ * normalize schemas at the provider boundary instead of forcing every workflow
+ * author to remember this provider-specific rule.
+ */
+function normalizeCodexOutputSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(schema)) {
+    if (isPlainRecord(value)) {
+      normalized[key] = normalizeCodexOutputSchema(value);
+    } else if (Array.isArray(value)) {
+      const items: unknown[] = value;
+      normalized[key] = items.map(item =>
+        isPlainRecord(item) ? normalizeCodexOutputSchema(item) : item
+      );
+    } else {
+      normalized[key] = value;
+    }
+  }
+
+  if (schemaAllowsObject(normalized)) {
+    normalized.additionalProperties = false;
+  }
+
+  return normalized;
+}
+
+function tryParseJson(text: string): unknown {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function findJsonEnd(text: string, startIndex: number): number | undefined {
+  const opener = text[startIndex];
+  const closer = opener === '{' ? '}' : opener === '[' ? ']' : undefined;
+  if (!closer) return undefined;
+
+  const stack: string[] = [closer];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = startIndex + 1; i < text.length; i += 1) {
+    const char = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === '{') {
+      stack.push('}');
+    } else if (char === '[') {
+      stack.push(']');
+    } else if (char === stack[stack.length - 1]) {
+      stack.pop();
+      if (stack.length === 0) return i + 1;
+    }
+  }
+
+  return undefined;
+}
+
+function extractStructuredJson(text: string): unknown {
+  const trimmed = text.trim();
+  const direct = tryParseJson(trimmed);
+  if (direct !== undefined) return direct;
+
+  const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(trimmed);
+  if (fenced?.[1]) {
+    const fencedJson = tryParseJson(fenced[1].trim());
+    if (fencedJson !== undefined) return fencedJson;
+  }
+
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] !== '{' && text[i] !== '[') continue;
+    const end = findJsonEnd(text, i);
+    if (end === undefined) continue;
+    const candidate = text.slice(i, end);
+    const parsed = tryParseJson(candidate);
+    if (parsed !== undefined) return parsed;
+  }
+
+  return undefined;
+}
+
+function expandEnvVarsInRecord(
+  record: Record<string, unknown>,
+  missingVars: string[]
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, val] of Object.entries(record)) {
+    if (typeof val !== 'string') {
+      getLog().warn({ key, valueType: typeof val }, 'codex.mcp_env_value_coerced_to_string');
+      result[key] = String(val);
+      continue;
+    }
+    result[key] = val.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_, varName: string) => {
+      const envVal = process.env[varName];
+      if (envVal === undefined) missingVars.push(varName);
+      return envVal ?? '';
+    });
+  }
+  return result;
+}
+
+function expandMcpEnvVars(config: Record<string, unknown>): {
+  expanded: Record<string, CodexConfigValue>;
+  missingVars: string[];
+} {
+  const result: Record<string, CodexConfigValue> = {};
+  const missingVars: string[] = [];
+
+  for (const [serverName, serverConfig] of Object.entries(config)) {
+    if (typeof serverConfig !== 'object' || serverConfig === null || Array.isArray(serverConfig)) {
+      getLog().warn(
+        { serverName, valueType: typeof serverConfig },
+        'codex.mcp_server_config_not_object'
+      );
+      continue;
+    }
+
+    const server = { ...(serverConfig as Record<string, unknown>) } as Record<
+      string,
+      CodexConfigValue | Record<string, unknown>
+    >;
+    if (server.env && typeof server.env === 'object' && !Array.isArray(server.env)) {
+      server.env = expandEnvVarsInRecord(server.env as Record<string, unknown>, missingVars);
+    }
+    if (server.headers && typeof server.headers === 'object' && !Array.isArray(server.headers)) {
+      server.headers = expandEnvVarsInRecord(
+        server.headers as Record<string, unknown>,
+        missingVars
+      );
+    }
+    result[serverName] = server as CodexConfigValue;
+  }
+
+  return { expanded: result, missingVars };
+}
+
+async function loadCodexMcpConfig(
+  mcpPath: string,
+  cwd: string
+): Promise<{
+  servers: Record<string, CodexConfigValue>;
+  serverNames: string[];
+  missingVars: string[];
+}> {
+  const fullPath = isAbsolute(mcpPath) ? mcpPath : resolve(cwd, mcpPath);
+
+  let raw: string;
+  try {
+    raw = await readFile(fullPath, 'utf-8');
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT') {
+      throw new Error(`MCP config file not found: ${mcpPath} (resolved to ${fullPath})`);
+    }
+    throw new Error(`Failed to read MCP config file: ${mcpPath} — ${e.message}`);
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch (parseErr) {
+    const detail = (parseErr as SyntaxError).message;
+    throw new Error(`MCP config file is not valid JSON: ${mcpPath} — ${detail}`);
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`MCP config must be a JSON object (Record<string, ServerConfig>): ${mcpPath}`);
+  }
+
+  const { expanded, missingVars } = expandMcpEnvVars(parsed);
+  return { servers: expanded, serverNames: Object.keys(expanded), missingVars };
+}
+
+async function buildCodexCliConfig(
+  nodeConfig: SendQueryOptions['nodeConfig'] | undefined,
+  cwd: string
+): Promise<{ config?: CodexConfigObject; warnings: CodexProviderWarning[] }> {
+  const mcpPath = typeof nodeConfig?.mcp === 'string' ? nodeConfig.mcp : nodeConfig?.mcp?.path;
+  if (!mcpPath) return { warnings: [] };
+
+  const { servers, serverNames, missingVars } = await loadCodexMcpConfig(mcpPath, cwd);
+  const warnings: CodexProviderWarning[] = [];
+  getLog().info({ serverNames, mcpPath }, 'codex.mcp_config_loaded');
+
+  if (missingVars.length > 0) {
+    const uniqueVars = [...new Set(missingVars)];
+    getLog().warn({ missingVars: uniqueVars }, 'codex.mcp_env_vars_missing');
+    warnings.push({
+      code: 'mcp_env_vars_missing',
+      message: `MCP config references undefined env vars: ${uniqueVars.join(', ')}. These will be empty strings — MCP servers may fail to authenticate.`,
+    });
+  }
+
+  return {
+    config: { mcp_servers: servers },
+    warnings,
+  };
+}
+
 const CODEX_MODEL_FALLBACKS: Record<string, string> = {
   'gpt-5.3-codex': 'gpt-5.2-codex',
 };
@@ -165,10 +411,10 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
     requestOptions?.outputFormat ?? requestOptions?.nodeConfig?.output_format
   );
   if (requestOptions?.outputFormat) {
-    turnOptions.outputSchema = requestOptions.outputFormat.schema;
+    turnOptions.outputSchema = normalizeCodexOutputSchema(requestOptions.outputFormat.schema);
   }
   if (requestOptions?.nodeConfig?.output_format && !requestOptions?.outputFormat) {
-    turnOptions.outputSchema = requestOptions.nodeConfig.output_format;
+    turnOptions.outputSchema = normalizeCodexOutputSchema(requestOptions.nodeConfig.output_format);
   }
   if (requestOptions?.abortSignal) {
     turnOptions.signal = requestOptions.abortSignal;
@@ -264,7 +510,7 @@ async function* streamCodexEvents(
         case 'agent_message':
           if (item.text) {
             if (hasOutputFormat) accumulatedText += item.text as string;
-            yield { type: 'assistant', content: item.text as string };
+            else yield { type: 'assistant', content: item.text as string };
           }
           break;
 
@@ -415,10 +661,10 @@ async function* streamCodexEvents(
       // dag-executor can handle all providers uniformly.
       let structuredOutput: unknown;
       if (hasOutputFormat && accumulatedText) {
-        try {
-          structuredOutput = JSON.parse(accumulatedText);
+        structuredOutput = extractStructuredJson(accumulatedText);
+        if (structuredOutput !== undefined) {
           getLog().debug('codex.structured_output_parsed');
-        } catch {
+        } else {
           getLog().warn(
             { outputPreview: accumulatedText.slice(0, 200) },
             'codex.structured_output_not_json'
@@ -513,17 +759,23 @@ export class CodexProvider implements IAgentProvider {
 
   private async createCodexClient(
     configCodexBinaryPath: string | undefined,
-    requestEnv?: Record<string, string>
+    requestEnv?: Record<string, string>,
+    codexCliConfig?: CodexConfigObject
   ): Promise<Codex> {
-    if (!requestEnv || Object.keys(requestEnv).length === 0) {
+    const hasRequestEnv = !!requestEnv && Object.keys(requestEnv).length > 0;
+    const hasCodexCliConfig = !!codexCliConfig && Object.keys(codexCliConfig).length > 0;
+
+    if (!hasRequestEnv && !hasCodexCliConfig) {
       return getCodex(configCodexBinaryPath);
     }
 
     try {
-      return new Codex({
+      const options: CodexOptions = {
         codexPathOverride: await resolveCodexBinaryPath(configCodexBinaryPath),
-        env: buildCodexEnv(requestEnv),
-      });
+        ...(hasRequestEnv ? { env: buildCodexEnv(requestEnv) } : {}),
+        ...(hasCodexCliConfig ? { config: codexCliConfig } : {}),
+      };
+      return new Codex(options);
     } catch (error) {
       const err = error as Error;
       if (isModelAccessError(err.message)) {
@@ -545,13 +797,25 @@ export class CodexProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const codexConfig = parseCodexConfig(assistantConfig);
+    const { config: codexCliConfig, warnings } = await buildCodexCliConfig(
+      requestOptions?.nodeConfig,
+      cwd
+    );
 
     // 1. Initialize SDK and build thread options
-    const codex = await this.createCodexClient(codexConfig.codexBinaryPath, requestOptions?.env);
+    const codex = await this.createCodexClient(
+      codexConfig.codexBinaryPath,
+      requestOptions?.env,
+      codexCliConfig
+    );
     const threadOptions = buildThreadOptions(cwd, requestOptions?.model, assistantConfig);
 
     if (requestOptions?.abortSignal?.aborted) {
       throw new Error('Query aborted');
+    }
+
+    for (const warning of warnings) {
+      yield { type: 'system', content: `⚠️ ${warning.message}` };
     }
 
     // 2. Create or resume thread

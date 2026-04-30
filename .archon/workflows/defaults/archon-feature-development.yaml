@@ -5,10 +5,14 @@ description: |
   Does: Implements the plan with validation loops -> creates pull request.
   NOT for: Creating plans (plans should be created separately), bug fixes, code reviews.
 
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
+
 nodes:
   - id: implement
     command: archon-implement
-    model: opus[1m]
+    model: gpt-5.5
 
   - id: create-pr
     command: archon-create-pr

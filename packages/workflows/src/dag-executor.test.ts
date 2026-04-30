@@ -93,7 +93,7 @@ function createMockStore(): IWorkflowStore {
     pauseWorkflowRun: mock(() => Promise.resolve()),
     cancelWorkflowRun: mock(() => Promise.resolve()),
     createWorkflowEvent: mock(() => Promise.resolve()),
-    getCompletedDagNodeOutputs: mock(() => Promise.resolve(new Map<string, string>())),
+    getCompletedDagNodeOutputs: mock(() => Promise.resolve(new Map<string, NodeOutput>())),
     getCodebase: mock(() => Promise.resolve(null)),
     getCodebaseEnvVars: mock(() => Promise.resolve({})),
   };
@@ -118,7 +118,7 @@ const mockClaudeCapabilities = () => ({
 /** Limited capabilities for Codex mock */
 const mockCodexCapabilities = () => ({
   sessionResume: true,
-  mcp: false,
+  mcp: true,
   hooks: false,
   skills: false,
   agents: false,
@@ -182,9 +182,24 @@ function node(id: string, depends_on?: string[], opts?: Partial<DagNode>): DagNo
   return { id, command: id, ...(depends_on?.length ? { depends_on } : {}), ...opts };
 }
 
-function makeOutput(state: NodeOutput['state'], output = ''): NodeOutput {
-  if (state === 'failed') return { state, output, error: 'error' };
-  return { state, output } as NodeOutput;
+function makeOutput(
+  state: NodeOutput['state'],
+  output = '',
+  structuredOutput?: unknown
+): NodeOutput {
+  if (state === 'failed') {
+    return {
+      state,
+      output,
+      ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+      error: 'error',
+    };
+  }
+  return {
+    state,
+    output,
+    ...(structuredOutput !== undefined ? { structuredOutput } : {}),
+  } as NodeOutput;
 }
 
 function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun>): WorkflowRun {
@@ -691,6 +706,27 @@ describe('substituteNodeOutputRefs', () => {
     expect(substituteNodeOutputRefs('Fix $a.output.type issue', outputs)).toBe('Fix BUG issue');
   });
 
+  it('dot notation extracts first JSON object from duplicated provider output', () => {
+    const duplicated =
+      '{"input_type":"needs_generation","prd_dir":".archon/ralph/ecommerce-products-catalogs"}' +
+      '{"input_type":"needs_generation","prd_dir":".archon/ralph/ecommerce-products-catalogs"}';
+    const outputs = new Map([['detect-input', makeOutput('completed', duplicated)]]);
+
+    expect(substituteNodeOutputRefs('$detect-input.output.prd_dir', outputs)).toBe(
+      '.archon/ralph/ecommerce-products-catalogs'
+    );
+  });
+
+  it('dot notation prefers first-class structuredOutput over output text', () => {
+    const outputs = new Map([
+      ['detect-input', makeOutput('completed', 'not-json', { prd_dir: '.archon/ralph/prd' })],
+    ]);
+
+    expect(substituteNodeOutputRefs('$detect-input.output.prd_dir', outputs)).toBe(
+      '.archon/ralph/prd'
+    );
+  });
+
   it('dot notation on invalid JSON returns empty string', () => {
     const outputs = new Map([['a', makeOutput('completed', 'not-json')]]);
     expect(substituteNodeOutputRefs('$a.output.field', outputs)).toBe('');
@@ -727,6 +763,17 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
 
   it('JSON field escapes shell metacharacters when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ cmd: 'foo; bar' }))]]);
+    expect(substituteNodeOutputRefs('echo $a.output.cmd', outputs, true)).toBe("echo 'foo; bar'");
+  });
+
+  it('JSON field from duplicated provider output is shell-escaped when escapedForBash=true', () => {
+    const duplicated = '{"cmd":"foo; bar"}{"cmd":"foo; bar"}';
+    const outputs = new Map([['a', makeOutput('completed', duplicated)]]);
+    expect(substituteNodeOutputRefs('echo $a.output.cmd', outputs, true)).toBe("echo 'foo; bar'");
+  });
+
+  it('structuredOutput field is shell-escaped when escapedForBash=true', () => {
+    const outputs = new Map([['a', makeOutput('completed', '', { cmd: 'foo; bar' })]]);
     expect(substituteNodeOutputRefs('echo $a.output.cmd', outputs, true)).toBe("echo 'foo; bar'");
   });
 
@@ -812,7 +859,8 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   });
 
   it('passes allowed_tools to sendQuery options for Claude node', async () => {
-    const mockDeps = createMockDeps();
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
 
@@ -848,7 +896,8 @@ describe('executeDagWorkflow -- tool restrictions', () => {
       getCapabilities: mockCodexCapabilities,
     });
 
-    const mockDeps = createMockDeps();
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
 
@@ -882,7 +931,8 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   });
 
   it('passes empty allowed_tools: [] (disable all tools) to sendQuery', async () => {
-    const mockDeps = createMockDeps();
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
 
@@ -909,7 +959,8 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   });
 
   it('passes hooks to sendQuery options for Claude node', async () => {
-    const mockDeps = createMockDeps();
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
 
@@ -1376,7 +1427,8 @@ describe('executeDagWorkflow -- output_format structured output', () => {
       yield { type: 'result', sessionId: 'sid-1', structuredOutput: structuredJson };
     });
 
-    const mockDeps = createMockDeps();
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('output-fmt-run', {
       user_message: 'classify this PR',
@@ -1428,6 +1480,18 @@ describe('executeDagWorkflow -- output_format structured output', () => {
     // The test node's when condition should evaluate to false (run_tests == 'false', not 'true')
     // So sendQuery should be called for classify + review = 2 times (not 3)
     expect(mockSendQueryDag.mock.calls.length).toBe(2);
+    const completedEvents = (
+      store.createWorkflowEvent as ReturnType<typeof mock>
+    ).mock.calls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_completed'
+    );
+    const classifyEvent = completedEvents.find(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).step_name === 'classify'
+    );
+    expect(
+      ((classifyEvent?.[0] as { data?: Record<string, unknown> } | undefined)?.data ?? {})
+        .structured_output
+    ).toEqual(structuredJson);
   });
 
   it('does NOT override nodeOutputText with structuredOutput when output_format is absent', async () => {
@@ -4626,6 +4690,8 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_completed'
     );
     expect(nodeCompletedEvents.length).toBeGreaterThan(0);
+    const completedData = (nodeCompletedEvents[0][0] as { data: Record<string, unknown> }).data;
+    expect(completedData.structured_output).toEqual({ category: 'math' });
   });
 
   it('fails the run when a node specifies an unknown provider (defense-in-depth at execution time)', async () => {
@@ -5715,6 +5781,46 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
     const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
     expect(nodeConfig?.effort).toBe('max');
+  });
+
+  it('forwards workflow-level Codex options through assistantConfig', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'codex-options-test',
+        nodes: [{ id: 'step1', command: 'my-cmd' }],
+        modelReasoningEffort: 'medium',
+        webSearchMode: 'live',
+      },
+      workflowRun,
+      'codex',
+      'gpt-5.5',
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' }
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
+    expect(optionsArg?.model).toBe('gpt-5.5');
+    expect(assistantConfig?.modelReasoningEffort).toBe('medium');
+    expect(assistantConfig?.webSearchMode).toBe('live');
   });
 
   it('warns user when Codex node has Claude-only options (effort)', async () => {

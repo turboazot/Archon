@@ -122,6 +122,21 @@ export const agentDefinitionSchema = z.object({
 
 export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
 
+export const mcpConfigSchema = z.preprocess(
+  val => {
+    if (typeof val === 'string') {
+      return { path: val };
+    }
+    return val;
+  },
+  z.object({
+    path: z.string().min(1, "'mcp.path' must be a non-empty string path"),
+    optional: z.boolean().optional().default(false),
+  })
+);
+
+export type McpConfig = z.infer<typeof mcpConfigSchema>;
+
 // Kebab-case: no leading/trailing/double hyphens (e.g. `brief-gen`, not `-brief`, `brief-`, `brief--gen`).
 const AGENT_ID_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
@@ -143,7 +158,7 @@ export const dagNodeBaseSchema = z.object({
   idle_timeout: z.number().optional(),
   retry: stepRetryConfigSchema.optional(),
   hooks: workflowNodeHooksSchema.optional(),
-  mcp: z.string().min(1, "'mcp' must be a non-empty string path").optional(),
+  mcp: mcpConfigSchema.optional(),
   skills: z
     .array(z.string().min(1, 'each skill must be a non-empty string'))
     .nonempty("'skills' must be a non-empty array")
@@ -553,7 +568,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.allowed_tools !== undefined ? { allowed_tools: data.allowed_tools } : {}),
       ...(data.denied_tools !== undefined ? { denied_tools: data.denied_tools } : {}),
       ...(data.hooks !== undefined ? { hooks: data.hooks } : {}),
-      ...(data.mcp !== undefined ? { mcp: data.mcp.trim() } : {}),
+      ...(data.mcp !== undefined ? { mcp: { ...data.mcp, path: data.mcp.path.trim() } } : {}),
       ...(data.skills !== undefined ? { skills: data.skills.map(s => s.trim()) } : {}),
       ...(data.agents !== undefined ? { agents: data.agents } : {}),
       ...(data.effort !== undefined ? { effort: data.effort } : {}),

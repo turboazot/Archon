@@ -353,17 +353,21 @@ export async function validateWorkflowResources(
     }
 
     // --- MCP nodes: check config file exists and is valid JSON ---
-    if ('mcp' in node && typeof node.mcp === 'string') {
-      const mcpPath = isAbsolute(node.mcp) ? node.mcp : resolve(cwd, node.mcp);
+    if ('mcp' in node && node.mcp !== undefined) {
+      const mcpRef = typeof node.mcp === 'string' ? node.mcp : node.mcp.path;
+      const mcpOptional = typeof node.mcp === 'object' && node.mcp.optional;
+      const mcpPath = isAbsolute(mcpRef) ? mcpRef : resolve(cwd, mcpRef);
 
       if (!(await fileExists(mcpPath))) {
-        issues.push({
-          level: 'error',
-          nodeId: node.id,
-          field: 'mcp',
-          message: `MCP config file not found: '${node.mcp}'`,
-          hint: `Create the file at ${mcpPath} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
-        });
+        if (!mcpOptional) {
+          issues.push({
+            level: 'error',
+            nodeId: node.id,
+            field: 'mcp',
+            message: `MCP config file not found: '${mcpRef}'`,
+            hint: `Create the file at ${mcpPath} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
+          });
+        }
       } else {
         // File exists — check it's valid JSON
         try {
@@ -374,7 +378,7 @@ export async function validateWorkflowResources(
               level: 'error',
               nodeId: node.id,
               field: 'mcp',
-              message: `MCP config file '${node.mcp}' must be a JSON object (Record<string, ServerConfig>)`,
+              message: `MCP config file '${mcpRef}' must be a JSON object (Record<string, ServerConfig>)`,
               hint: 'The file should contain a JSON object where each key is a server name',
             });
           }
@@ -384,7 +388,7 @@ export async function validateWorkflowResources(
             level: 'error',
             nodeId: node.id,
             field: 'mcp',
-            message: `MCP config file '${node.mcp}' contains invalid JSON: ${err.message}`,
+            message: `MCP config file '${mcpRef}' contains invalid JSON: ${err.message}`,
             hint: 'Fix the JSON syntax in the MCP config file',
           });
         }

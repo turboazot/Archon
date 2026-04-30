@@ -10,6 +10,7 @@
  */
 import { pool, getDialect } from './connection';
 import { createLogger } from '@archon/paths';
+import type { NodeOutput } from '@archon/workflows/schemas/workflow-run';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -115,13 +116,13 @@ export async function listRecentEvents(
 }
 
 /**
- * Return a map of nodeId → output for all node_completed events in a workflow run.
+ * Return a map of nodeId → NodeOutput for all node_completed events in a workflow run.
  * Used by the DAG executor to restore node outputs when resuming a failed run.
  * Throws on DB error — caller owns the degradation policy.
  */
 export async function getCompletedDagNodeOutputs(
   workflowRunId: string
-): Promise<Map<string, string>> {
+): Promise<Map<string, NodeOutput>> {
   const result = await pool.query<{
     step_name: string | null;
     data: string | Record<string, unknown>;
@@ -131,7 +132,7 @@ export async function getCompletedDagNodeOutputs(
      ORDER BY created_at ASC`,
     [workflowRunId]
   );
-  const outputs = new Map<string, string>();
+  const outputs = new Map<string, NodeOutput>();
   for (const row of result.rows) {
     if (!row.step_name) continue;
     let data: Record<string, unknown>;
@@ -145,7 +146,13 @@ export async function getCompletedDagNodeOutputs(
       continue;
     }
     if (typeof data.node_output === 'string') {
-      outputs.set(row.step_name, data.node_output);
+      outputs.set(row.step_name, {
+        state: 'completed',
+        output: data.node_output,
+        ...(data.structured_output !== undefined
+          ? { structuredOutput: data.structured_output }
+          : {}),
+      });
     }
   }
   return outputs;

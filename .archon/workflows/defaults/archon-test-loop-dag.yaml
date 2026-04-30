@@ -5,6 +5,10 @@ description: |
   NOT for: General testing questions or debugging.
   Does: Initializes a counter, iterates until it reaches 3, then reports completion.
 
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
+
 nodes:
   - id: setup
     bash: |

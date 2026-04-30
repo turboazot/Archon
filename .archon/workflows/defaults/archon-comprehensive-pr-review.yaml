@@ -10,6 +10,10 @@ description: |
   This workflow produces artifacts in $ARTIFACTS_DIR/../reviews/pr-{number}/ and posts
   a comprehensive review comment to the GitHub PR.
 
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
+
 nodes:
   - id: scope
     command: archon-pr-review-scope
