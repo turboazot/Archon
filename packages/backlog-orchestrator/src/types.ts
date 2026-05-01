@@ -36,6 +36,7 @@ export interface HarnessPullRequest {
   number: number;
   issueNumber: number;
   branch: string;
+  baseBranch: string;
   state: PullRequestState;
   draft: boolean;
   labels: string[];
@@ -44,6 +45,7 @@ export interface HarnessPullRequest {
   review: ReviewState;
   mergeable: boolean;
   mergeability: MergeabilityState;
+  closingIssueNumbers: number[];
 }
 
 export interface HarnessWorkflowRun {
@@ -75,6 +77,7 @@ export interface StoredOrchestratorRun {
 }
 
 export interface GitHubPort {
+  getRepositoryInfo(repo: string): Promise<RepositoryInfo>;
   listIssues(repo: string): Promise<HarnessIssue[]>;
   getIssue(repo: string, issueNumber: number): Promise<HarnessIssue | undefined>;
   listPullRequests(repo: string): Promise<HarnessPullRequest[]>;
@@ -88,6 +91,11 @@ export interface GitHubPort {
   ): Promise<void>;
   addIssueComment(repo: string, issueNumber: number, body: string): Promise<void>;
   mergePullRequest(repo: string, prNumber: number): Promise<void>;
+}
+
+export interface RepositoryInfo {
+  defaultBranch: string;
+  autoCloseIssuesEnabled?: boolean;
 }
 
 export interface ArchonPort {
@@ -112,6 +120,7 @@ export interface StartWorkflowInput {
 
 export interface HarnessOrchestratorConfig {
   repo: string;
+  baseBranch?: string;
   maxParallelWorkflows: number;
   maxOpenAgentPrs: number;
   maxNewRunsPerCycle: number;
@@ -123,6 +132,8 @@ export interface HarnessOrchestratorConfig {
   workflowLabelToName: Record<string, string>;
   now: () => Date;
 }
+
+export type BacklogOrchestratorConfig = HarnessOrchestratorConfig;
 
 export interface HarnessOrchestratorPorts {
   github: GitHubPort;
@@ -140,6 +151,7 @@ export interface StatusReport {
   nextEligibleIssues: HarnessIssue[];
   failedRuns: StoredOrchestratorRun[];
   startedRuns: StoredOrchestratorRun[];
+  warnings: string[];
 }
 
 export interface BlockedIssue {

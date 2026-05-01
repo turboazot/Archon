@@ -5,6 +5,8 @@
     "paths": {
       "@archon/adapters": ["../adapters/src"],
       "@archon/adapters/*": ["../adapters/src/*"],
+      "@archon/backlog-orchestrator": ["../backlog-orchestrator/src"],
+      "@archon/backlog-orchestrator/*": ["../backlog-orchestrator/src/*"],
       "@archon/core": ["../core/src"],
       "@archon/core/*": ["../core/src/*"],
       "@archon/server": ["../server/src"],
@@ -17,6 +19,7 @@
   },
   "include": [
     "src/**/*",
+    "../backlog-orchestrator/src/**/*.ts",
     "../core/src/**/*.ts",
     "../server/src/**/*.ts",
     "../adapters/src/**/*.ts",
@@ -26,6 +29,7 @@
     "node_modules",
     "dist",
     "**/*.test.ts",
+    "../backlog-orchestrator/src/**/*.test.ts",
     "../core/src/**/*.test.ts",
     "../server/src/**/*.test.ts",
     "../adapters/src/**/*.test.ts"

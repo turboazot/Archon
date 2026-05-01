@@ -220,6 +220,19 @@ export interface RepoConfig {
   env?: Record<string, string>;
 
   /**
+   * GitHub backlog orchestrator settings.
+   */
+  backlog?: {
+    repo?: string;
+    maxParallelWorkflows?: number;
+    maxOpenAgentPrs?: number;
+    maxNewRunsPerCycle?: number;
+    areaLockPolicy?: 'none' | 'conservative';
+    workflowLabelToName?: Record<string, string>;
+    autoMergeEnabled?: boolean;
+  };
+
+  /**
    * Default commands/workflows configuration
    */
   defaults?: {
@@ -298,6 +311,16 @@ export interface MergedConfig {
    * Undefined when no env vars are configured.
    */
   envVars?: Record<string, string>;
+
+  backlog?: {
+    repo?: string;
+    maxParallelWorkflows?: number;
+    maxOpenAgentPrs?: number;
+    maxNewRunsPerCycle?: number;
+    areaLockPolicy?: 'none' | 'conservative';
+    workflowLabelToName?: Record<string, string>;
+    autoMergeEnabled?: boolean;
+  };
 }
 
 /**

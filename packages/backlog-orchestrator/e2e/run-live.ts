@@ -1,12 +1,12 @@
 import { mkdir, readFile, readdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { ArchonRestAdapter } from '../src/adapters/archon-rest';
 import { GitHubGhAdapter } from '../src/adapters/github-gh';
-import { SqliteOrchestratorStore } from '../src/stores/sqlite-store';
 import { createDefaultHarnessConfig, HarnessOrchestrator } from '../src/orchestrator';
 import { LIFECYCLE_LABELS } from '../src/lifecycle';
 import type { HarnessIssue, StatusReport } from '../src/types';
+import { ArchonRestAdapter } from './support/archon-rest';
+import { SqliteOrchestratorStore } from './support/sqlite-store';
 
 const DEFAULT_REPO = 'podlodka-ai-club/X15';
 const RESULTS_ROOT = join(import.meta.dir, 'results');

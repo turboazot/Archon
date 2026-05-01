@@ -64,6 +64,12 @@ import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
+import {
+  backlogSetupCommand,
+  backlogReconcileCommand,
+  backlogRunCommand,
+  backlogStatusCommand,
+} from './commands/backlog';
 import { closeDatabase } from '@archon/core';
 import {
   setLogLevel,
@@ -100,6 +106,10 @@ Commands:
   workflow status            Show status of running workflows
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove stale environments (default: 7 days)
+  backlog setup              Ensure GitHub labels for backlog orchestration
+  backlog reconcile          Run one backlog orchestrator reconciliation cycle
+  backlog run                Run the backlog orchestrator loop
+  backlog status             Show recorded backlog orchestrator state
   isolation cleanup --merged Remove environments with branches merged into main
   continue <branch> [msg]    Continue work on an existing worktree with prior context
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
@@ -123,6 +133,8 @@ Options:
   --no-context               Skip context injection for 'continue'
   --port <port>              Override server port for 'serve' (default: 3090)
   --download-only            Download web UI without starting the server
+  --cycles <n>               Number of backlog run cycles (default: forever)
+  --poll-interval <seconds>  Backlog run sleep interval (default: 60)
 
 Examples:
   archon chat "What does the orchestrator do?"
@@ -202,6 +214,8 @@ async function main(): Promise<number> {
         'no-context': { type: 'boolean' },
         port: { type: 'string' },
         'download-only': { type: 'boolean' },
+        cycles: { type: 'string' },
+        'poll-interval': { type: 'string' },
         scope: { type: 'string' },
         force: { type: 'boolean' },
       },
@@ -480,6 +494,52 @@ async function main(): Promise<number> {
             console.error(
               'Available: list, run, status, resume, abandon, approve, reject, cleanup, event'
             );
+            return 1;
+        }
+        break;
+
+      case 'backlog':
+        switch (subcommand) {
+          case 'setup':
+            await backlogSetupCommand(effectiveCwd);
+            break;
+
+          case 'reconcile':
+            await backlogReconcileCommand(effectiveCwd);
+            break;
+
+          case 'run': {
+            const rawCycles = values.cycles as string | undefined;
+            const rawPollInterval = values['poll-interval'] as string | undefined;
+            const cycles = rawCycles === undefined ? undefined : Number(rawCycles);
+            const pollIntervalSeconds =
+              rawPollInterval === undefined ? undefined : Number(rawPollInterval);
+            if (cycles !== undefined && (!Number.isInteger(cycles) || cycles < 1)) {
+              console.error('Error: --cycles must be a positive integer.');
+              return 1;
+            }
+            if (
+              pollIntervalSeconds !== undefined &&
+              (!Number.isFinite(pollIntervalSeconds) || pollIntervalSeconds < 1)
+            ) {
+              console.error('Error: --poll-interval must be a positive number of seconds.');
+              return 1;
+            }
+            await backlogRunCommand({ cwd: effectiveCwd, cycles, pollIntervalSeconds });
+            break;
+          }
+
+          case 'status':
+            await backlogStatusCommand(effectiveCwd);
+            break;
+
+          default:
+            if (subcommand === undefined) {
+              console.error('Missing backlog subcommand');
+            } else {
+              console.error(`Unknown backlog subcommand: ${subcommand}`);
+            }
+            console.error('Available: setup, reconcile, run, status');
             return 1;
         }
         break;

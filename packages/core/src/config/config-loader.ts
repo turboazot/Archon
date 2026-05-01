@@ -470,6 +470,16 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     result.envVars = { ...result.envVars, ...repo.env };
   }
 
+  if (repo.backlog) {
+    result.backlog = { ...result.backlog, ...repo.backlog };
+    if (repo.backlog.workflowLabelToName) {
+      result.backlog.workflowLabelToName = {
+        ...result.backlog.workflowLabelToName,
+        ...repo.backlog.workflowLabelToName,
+      };
+    }
+  }
+
   return result;
 }
 

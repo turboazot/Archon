@@ -43,7 +43,12 @@ export default tseslint.config(
 
   // Project-specific settings
   {
-    files: ['packages/*/src/**/*.{ts,tsx}', 'scripts/**/*.ts', 'poc/harness/**/*.ts'],
+    files: [
+      'packages/*/src/**/*.{ts,tsx}',
+      'packages/*/e2e/**/*.ts',
+      'scripts/**/*.ts',
+      'poc/harness/**/*.ts',
+    ],
     languageOptions: {
       parserOptions: {
         projectService: true,

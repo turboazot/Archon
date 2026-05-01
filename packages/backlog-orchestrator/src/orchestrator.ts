@@ -12,6 +12,7 @@ import type {
   HarnessOrchestratorConfig,
   HarnessOrchestratorPorts,
   HarnessPullRequest,
+  RepositoryInfo,
   OrchestratorStore,
   StatusReport,
   StoredOrchestratorRun,
@@ -54,6 +55,7 @@ export class HarnessOrchestrator {
   }
 
   async reconcileOnce(): Promise<StatusReport> {
+    const repositoryInfo = await this.github.getRepositoryInfo(this.config.repo);
     const issues = await this.github.listIssues(this.config.repo);
     const prs = await this.github.listPullRequests(this.config.repo);
     await this.syncKnownRuns(issues);
@@ -63,7 +65,8 @@ export class HarnessOrchestrator {
     const openAgentPrs = this.findOpenAgentPrs(prs, refreshedRuns);
     const report = this.buildInitialReport(refreshedRuns, openAgentPrs);
 
-    await this.syncPullRequests(issues, prs, refreshedRuns, report);
+    this.addRepositoryWarnings(repositoryInfo, report);
+    await this.syncPullRequests(issues, prs, refreshedRuns, report, repositoryInfo);
     await this.scheduleReadyIssues(issues, refreshedRuns, openAgentPrs, activeRuns, report);
 
     return report;
@@ -129,7 +132,8 @@ export class HarnessOrchestrator {
     issues: HarnessIssue[],
     prs: HarnessPullRequest[],
     runs: StoredOrchestratorRun[],
-    report: StatusReport
+    report: StatusReport,
+    repositoryInfo: RepositoryInfo
   ): Promise<void> {
     for (const run of runs) {
       if (!run.prNumber || TERMINAL_RUN_STATUSES.has(run.status)) continue;
@@ -139,6 +143,21 @@ export class HarnessOrchestrator {
         (await this.github.getIssue(this.config.repo, run.issueNumber));
       const pr = prs.find(candidate => candidate.number === run.prNumber);
       if (!issue || !pr) continue;
+
+      if (!this.isPrLinkedToIssue(pr, issue.number)) {
+        await this.transitionRun(run, {
+          status: 'blocked',
+          lastError: `PR #${pr.number} must contain exactly one closing reference for issue #${issue.number}`,
+        });
+        await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.blocked);
+        await this.commentOnce(
+          run,
+          issue.number,
+          'pr-link-invalid',
+          `PR #${pr.number} is not safely linked to this issue. Add exactly one closing keyword such as \`Fixes #${issue.number}\` to the PR body.`
+        );
+        continue;
+      }
 
       if (pr.state === 'merged') {
         await this.transitionRun(run, {
@@ -192,7 +211,7 @@ export class HarnessOrchestrator {
           `PR #${pr.number} passed validation and is ready for review.`
         );
 
-        if (this.isAutoMergeCandidate(issue, pr, run)) {
+        if (this.isAutoMergeCandidate(issue, pr, run, repositoryInfo)) {
           report.autoMergeCandidates.push(pr);
           if (this.config.autoMergeEnabled) {
             await this.github.mergePullRequest(this.config.repo, pr.number);
@@ -513,17 +532,43 @@ export class HarnessOrchestrator {
       nextEligibleIssues: [],
       failedRuns: runs.filter(run => run.status === 'failed'),
       startedRuns: [],
+      warnings: [],
     };
+  }
+
+  private addRepositoryWarnings(repositoryInfo: RepositoryInfo, report: StatusReport): void {
+    const baseBranch = this.config.baseBranch ?? repositoryInfo.defaultBranch;
+    if (baseBranch !== repositoryInfo.defaultBranch) {
+      report.warnings.push(
+        `GitHub issue auto-close only works for PRs targeting the default branch (${repositoryInfo.defaultBranch}); configured base branch is ${baseBranch}.`
+      );
+    }
+    if (repositoryInfo.autoCloseIssuesEnabled === false) {
+      report.warnings.push(
+        'GitHub repository auto-close for merged linked pull requests appears to be disabled.'
+      );
+    }
+  }
+
+  private isPrLinkedToIssue(pr: HarnessPullRequest, issueNumber: number): boolean {
+    return pr.closingIssueNumbers.length === 1 && pr.closingIssueNumbers[0] === issueNumber;
   }
 
   private isAutoMergeCandidate(
     issue: HarnessIssue,
     pr: HarnessPullRequest,
-    run: StoredOrchestratorRun
+    run: StoredOrchestratorRun,
+    repositoryInfo: RepositoryInfo
   ): boolean {
+    const baseBranch = this.config.baseBranch ?? repositoryInfo.defaultBranch;
     return (
       issue.labels.includes(LIFECYCLE_LABELS.autoMerge) &&
       pr.issueNumber === issue.number &&
+      pr.closingIssueNumbers.length === 1 &&
+      pr.closingIssueNumbers[0] === issue.number &&
+      pr.baseBranch === repositoryInfo.defaultBranch &&
+      baseBranch === repositoryInfo.defaultBranch &&
+      repositoryInfo.autoCloseIssuesEnabled !== false &&
       pr.state === 'open' &&
       !pr.draft &&
       pr.checks === 'passing' &&
@@ -533,3 +578,5 @@ export class HarnessOrchestrator {
     );
   }
 }
+
+export { HarnessOrchestrator as BacklogOrchestrator };

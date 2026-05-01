@@ -5,6 +5,7 @@ export function createDefaultHarnessConfig(
 ): HarnessOrchestratorConfig {
   return {
     repo: 'owner/harness',
+    baseBranch: undefined,
     maxParallelWorkflows: 1,
     maxOpenAgentPrs: 3,
     maxNewRunsPerCycle: 1,

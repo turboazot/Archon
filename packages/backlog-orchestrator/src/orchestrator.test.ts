@@ -359,6 +359,8 @@ describe('HarnessOrchestrator', () => {
 
     await orchestrator.reconcileOnce();
     await orchestrator.reconcileOnce();
+    await orchestrator.reconcileOnce();
+    await orchestrator.reconcileOnce();
     const runs = await store.listRuns(repo);
     const issue = await github.getIssue(repo, 1);
 
@@ -397,6 +399,7 @@ describe('HarnessOrchestrator', () => {
 
     await orchestrator.reconcileOnce();
     await orchestrator.reconcileOnce();
+    await orchestrator.reconcileOnce();
     const runs = await store.listRuns(repo);
 
     expect(archon.getStartedRuns()[1]?.workflowName).toBe('fix-pr');
@@ -428,6 +431,7 @@ describe('HarnessOrchestrator', () => {
       })
     );
 
+    await orchestrator.reconcileOnce();
     await orchestrator.reconcileOnce();
     await orchestrator.reconcileOnce();
     const runs = await store.listRuns(repo);
@@ -581,6 +585,77 @@ describe('HarnessOrchestrator', () => {
 
     expect(report.autoMergeCandidates.map(pr => pr.number)).toEqual([10]);
     expect(prs[0]?.state).toBe('open');
+  });
+
+  test('blocks auto-merge candidate when PR base is not the GitHub default branch', async () => {
+    const { github, archon, orchestrator } = createHarness(
+      {
+        defaultBranch: 'main',
+        issues: [
+          makeIssue({
+            number: 1,
+            labels: ['archon:ready', 'archon-workflow:docs', 'archon:auto-merge'],
+          }),
+        ],
+      },
+      { baseBranch: 'dev', autoMergeEnabled: true }
+    );
+
+    await orchestrator.reconcileOnce();
+    const workflowRun = archon.getStartedRuns()[0];
+    archon.completeRun(workflowRun.id, 'succeeded');
+    github.addPullRequest(
+      makePullRequest({
+        number: 10,
+        issueNumber: 1,
+        branch: workflowRun.branch,
+        baseBranch: 'dev',
+        checks: 'passing',
+        review: 'approved',
+      })
+    );
+
+    const report = await orchestrator.reconcileOnce();
+    const prs = await github.listPullRequests(repo);
+
+    expect(report.warnings[0]).toContain('default branch (main)');
+    expect(report.autoMergeCandidates).toHaveLength(0);
+    expect(report.readyForHumanReview.map(pr => pr.number)).toEqual([10]);
+    expect(prs[0]?.state).toBe('open');
+  });
+
+  test('blocks tracked PRs that do not contain exactly one matching closing reference', async () => {
+    const { github, archon, store, orchestrator } = createHarness({
+      issues: [
+        makeIssue({
+          number: 1,
+          labels: ['archon:ready', 'archon-workflow:docs'],
+        }),
+      ],
+    });
+
+    await orchestrator.reconcileOnce();
+    const workflowRun = archon.getStartedRuns()[0];
+    archon.completeRun(workflowRun.id, 'succeeded');
+    github.addPullRequest(
+      makePullRequest({
+        number: 10,
+        issueNumber: 1,
+        branch: workflowRun.branch,
+        closingIssueNumbers: [1, 2],
+      })
+    );
+
+    await orchestrator.reconcileOnce();
+    await orchestrator.reconcileOnce();
+    await orchestrator.reconcileOnce();
+    const runs = await store.listRuns(repo);
+    const issue = await github.getIssue(repo, 1);
+
+    expect(runs[0]?.status).toBe('blocked');
+    expect(runs[0]?.lastError).toContain('exactly one closing reference');
+    expect(issue?.labels).toContain('archon:blocked');
+    expect(github.getComments(1).some(comment => comment.body.includes('Fixes #1'))).toBe(true);
   });
 
   test('starts two issues in parallel after their shared blocker closes', async () => {

@@ -12,7 +12,7 @@ const REPO = 'owner/harness';
 async function main(): Promise<void> {
   const fixtureName = Bun.argv[2];
   if (!fixtureName || fixtureName === '--help' || fixtureName === '-h') {
-    console.log('Usage: bun ./poc/harness/e2e/run-fixture.ts <fixture>');
+    console.log('Usage: bun ./packages/backlog-orchestrator/e2e/run-fixture.ts <fixture>');
     console.log(`Available fixtures: ${listFixtureNames().join(', ')}`);
     return;
   }

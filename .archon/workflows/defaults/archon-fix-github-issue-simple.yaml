@@ -172,5 +172,4 @@ nodes:
       fi
 
       gh pr merge "$PR_NUMBER" --squash
-      gh issue close "$ISSUE_NUM" --comment "Closed after Archon simple workflow self-review and merge of PR #$PR_NUMBER."
-      echo "Merged PR #$PR_NUMBER and closed issue #$ISSUE_NUM"
+      echo "Merged PR #$PR_NUMBER. GitHub will close issue #$ISSUE_NUM from the PR closing keyword when auto-close is enabled."

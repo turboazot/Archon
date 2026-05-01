@@ -32,6 +32,7 @@ cat $ARTIFACTS_DIR/validation.md
 Extract:
 - Plan title and summary
 - Branch name
+- GitHub issue number, when present in workflow arguments, branch name, or `$ARTIFACTS_DIR/.issue-number`
 - Files changed
 - Tests written
 - Validation results
@@ -178,7 +179,12 @@ git push origin HEAD
 
 **Plan**: `{plan-source-path}`
 **Workflow ID**: `$WORKFLOW_ID`
+{If from a GitHub issue: `Fixes #<issue-number>`}
 ```
+
+Whether using a project template or the default body, if this PR implements a GitHub issue,
+include exactly one closing keyword in the PR body: `Fixes #<issue-number>`, `Closes #<issue-number>`,
+or `Resolves #<issue-number>`. Do not include multiple closing issue references.
 
 ### 3.2 Create or Update PR
 

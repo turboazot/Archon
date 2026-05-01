@@ -8,6 +8,7 @@ import type {
   ReviewState,
   MergeabilityState,
 } from '../types';
+import { extractClosingIssueReferences, findSingleClosingIssueNumber } from '../pr-linking';
 
 const execFileAsync = promisify(execFile);
 
@@ -32,6 +33,7 @@ interface GhPullRequest {
   number: number;
   body: string;
   headRefName: string;
+  baseRefName: string;
   state: string;
   isDraft: boolean;
   labels: GhLabel[];
@@ -41,11 +43,45 @@ interface GhPullRequest {
   statusCheckRollup: { state?: string; conclusion?: string; status?: string }[];
 }
 
+interface GhRepository {
+  defaultBranchRef: {
+    name: string;
+  };
+}
+
+interface GhRepositoryRest {
+  auto_close_issues?: boolean;
+}
+
 export class GitHubGhAdapter implements GitHubPort {
   private readonly allowMerge: boolean;
 
   constructor(options: GitHubGhOptions = {}) {
     this.allowMerge = options.allowMerge ?? false;
+  }
+
+  async getRepositoryInfo(
+    repo: string
+  ): Promise<{ defaultBranch: string; autoCloseIssuesEnabled?: boolean }> {
+    const repository = await ghJson<GhRepository>([
+      'repo',
+      'view',
+      repo,
+      '--json',
+      'defaultBranchRef',
+    ]);
+    const restRepository = await ghJson<GhRepositoryRest>([
+      'api',
+      '-H',
+      'Accept: application/vnd.github+json',
+      '-H',
+      'X-GitHub-Api-Version: 2026-03-10',
+      `repos/${repo}`,
+    ]);
+    return {
+      defaultBranch: repository.defaultBranchRef.name,
+      autoCloseIssuesEnabled: restRepository.auto_close_issues,
+    };
   }
 
   async listIssues(repo: string): Promise<HarnessIssue[]> {
@@ -96,7 +132,7 @@ export class GitHubGhAdapter implements GitHubPort {
       '--limit',
       '100',
       '--json',
-      'number,body,headRefName,state,isDraft,labels,files,mergeable,reviewDecision,statusCheckRollup',
+      'number,body,headRefName,baseRefName,state,isDraft,labels,files,mergeable,reviewDecision,statusCheckRollup',
     ]);
     return prs.map(mapPullRequest).sort((left, right) => left.number - right.number);
   }
@@ -291,10 +327,14 @@ function mapIssue(issue: GhIssue, blockedByIssueNumbers: number[]): HarnessIssue
 }
 
 function mapPullRequest(pr: GhPullRequest): HarnessPullRequest {
+  const closingIssueNumbers = extractClosingIssueReferences(pr.body ?? '').map(
+    reference => reference.issueNumber
+  );
   return {
     number: pr.number,
-    issueNumber: findClosingIssueNumber(pr.body ?? '') ?? pr.number,
+    issueNumber: findSingleClosingIssueNumber(pr.body ?? '') ?? pr.number,
     branch: pr.headRefName,
+    baseBranch: pr.baseRefName,
     state: mapPullRequestState(pr.state),
     draft: pr.isDraft,
     labels: pr.labels.map(label => label.name),
@@ -303,13 +343,8 @@ function mapPullRequest(pr: GhPullRequest): HarnessPullRequest {
     review: mapReviewState(pr.reviewDecision),
     mergeable: pr.mergeable === 'MERGEABLE',
     mergeability: mapMergeabilityState(pr.mergeable),
+    closingIssueNumbers,
   };
-}
-
-function findClosingIssueNumber(body: string): number | undefined {
-  const match = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/i.exec(body);
-  if (!match) return undefined;
-  return Number(match[1]);
 }
 
 function mapPullRequestState(state: string): HarnessPullRequest['state'] {

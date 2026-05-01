@@ -4,7 +4,7 @@ import type {
   HarnessWorkflowRun,
   StartWorkflowInput,
   WorkflowRunState,
-} from '../types';
+} from '../../src/types';
 
 interface ArchonRestOptions {
   baseUrl: string;

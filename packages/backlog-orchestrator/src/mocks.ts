@@ -19,14 +19,34 @@ export class InMemoryGitHub implements GitHubPort {
   private readonly issues = new Map<number, HarnessIssue>();
   private readonly pullRequests = new Map<number, HarnessPullRequest>();
   private readonly comments: IssueComment[] = [];
+  private readonly defaultBranch: string;
+  private readonly autoCloseIssuesEnabled: boolean;
 
-  constructor(input: { issues?: HarnessIssue[]; pullRequests?: HarnessPullRequest[] } = {}) {
+  constructor(
+    input: {
+      issues?: HarnessIssue[];
+      pullRequests?: HarnessPullRequest[];
+      defaultBranch?: string;
+      autoCloseIssuesEnabled?: boolean;
+    } = {}
+  ) {
+    this.defaultBranch = input.defaultBranch ?? 'main';
+    this.autoCloseIssuesEnabled = input.autoCloseIssuesEnabled ?? true;
     for (const issue of input.issues ?? []) {
       this.issues.set(issue.number, cloneIssue(issue));
     }
     for (const pr of input.pullRequests ?? []) {
       this.pullRequests.set(pr.number, clonePullRequest(pr));
     }
+  }
+
+  async getRepositoryInfo(
+    _repo: string
+  ): Promise<{ defaultBranch: string; autoCloseIssuesEnabled: boolean }> {
+    return {
+      defaultBranch: this.defaultBranch,
+      autoCloseIssuesEnabled: this.autoCloseIssuesEnabled,
+    };
   }
 
   async listIssues(_repo: string): Promise<HarnessIssue[]> {
@@ -202,6 +222,8 @@ export function makePullRequest(
     review: 'none',
     mergeable: true,
     mergeability: 'mergeable',
+    baseBranch: 'main',
+    closingIssueNumbers: [overrides.issueNumber],
     ...overrides,
   };
 }

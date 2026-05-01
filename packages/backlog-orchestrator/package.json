@@ -1,0 +1,28 @@
+{
+  "name": "@archon/backlog-orchestrator",
+  "version": "0.3.10",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./adapters/github-gh": "./src/adapters/github-gh.ts",
+    "./mocks": "./src/mocks.ts"
+  },
+  "scripts": {
+    "test": "bun test src/orchestrator.test.ts src/pr-linking.test.ts && bun e2e/run-fixture.ts ready-success && bun e2e/run-fixture.ts pr-validation-fails-then-fix",
+    "test:unit": "bun test src/orchestrator.test.ts src/pr-linking.test.ts",
+    "test:e2e": "bun e2e/run-fixture.ts ready-success && bun e2e/run-fixture.ts pr-validation-fails-then-fix",
+    "smoke:live": "bun e2e/run-live.ts",
+    "type-check": "bun x tsc --noEmit",
+    "build": "echo 'No build needed - Bun runs TypeScript directly'"
+  },
+  "dependencies": {
+    "@archon/core": "workspace:*",
+    "@archon/git": "workspace:*",
+    "@archon/paths": "workspace:*"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

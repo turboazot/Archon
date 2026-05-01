@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { dirname } from 'path';
 import { mkdirSync } from 'fs';
-import type { OrchestratorStore, StoredOrchestratorRun } from '../types';
+import type { OrchestratorStore, StoredOrchestratorRun } from '../../src/types';
 
 interface StoredRunRow {
   id: string;

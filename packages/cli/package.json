@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@archon/adapters": "workspace:*",
+    "@archon/backlog-orchestrator": "workspace:*",
     "@archon/core": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",

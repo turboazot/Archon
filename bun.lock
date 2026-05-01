@@ -23,7 +23,7 @@
     },
     "packages/adapters": {
       "name": "@archon/adapters",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "dependencies": {
         "@archon/core": "workspace:*",
         "@archon/git": "workspace:*",
@@ -39,14 +39,27 @@
         "typescript": "^5.0.0",
       },
     },
+    "packages/backlog-orchestrator": {
+      "name": "@archon/backlog-orchestrator",
+      "version": "0.3.10",
+      "dependencies": {
+        "@archon/core": "workspace:*",
+        "@archon/git": "workspace:*",
+        "@archon/paths": "workspace:*",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
     "packages/cli": {
       "name": "@archon/cli",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "bin": {
         "archon": "./src/cli.ts",
       },
       "dependencies": {
         "@archon/adapters": "workspace:*",
+        "@archon/backlog-orchestrator": "workspace:*",
         "@archon/core": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
@@ -63,7 +76,7 @@
     },
     "packages/core": {
       "name": "@archon/core",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "dependencies": {
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
@@ -83,7 +96,7 @@
     },
     "packages/docs-web": {
       "name": "@archon/docs-web",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "dependencies": {
         "@astrojs/starlight": "^0.38.0",
         "astro": "^6.1.0",
@@ -92,7 +105,7 @@
     },
     "packages/git": {
       "name": "@archon/git",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "dependencies": {
         "@archon/paths": "workspace:*",
       },
@@ -102,7 +115,7 @@
     },
     "packages/isolation": {
       "name": "@archon/isolation",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "dependencies": {
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
@@ -113,7 +126,7 @@
     },
     "packages/paths": {
       "name": "@archon/paths",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "dependencies": {
         "dotenv": "^17",
         "pino": "^9",
@@ -126,7 +139,7 @@
     },
     "packages/providers": {
       "name": "@archon/providers",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.121",
         "@archon/paths": "workspace:*",
@@ -144,7 +157,7 @@
     },
     "packages/server": {
       "name": "@archon/server",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "dependencies": {
         "@archon/adapters": "workspace:*",
         "@archon/core": "workspace:*",
@@ -163,7 +176,7 @@
     },
     "packages/web": {
       "name": "@archon/web",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "dependencies": {
         "@dagrejs/dagre": "^2.0.4",
         "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -215,7 +228,7 @@
     },
     "packages/workflows": {
       "name": "@archon/workflows",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "dependencies": {
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
@@ -260,6 +273,8 @@
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.81.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-D4K5PvEV6wPiRtVlVsJHIUhHAmOZ6IT/I9rKlTf84gR7GyyAurPJK7z9BOf/AZqC5d1DhYQGJNKRmV+q8dGhgw=="],
 
     "@archon/adapters": ["@archon/adapters@workspace:packages/adapters"],
+
+    "@archon/backlog-orchestrator": ["@archon/backlog-orchestrator@workspace:packages/backlog-orchestrator"],
 
     "@archon/cli": ["@archon/cli@workspace:packages/cli"],
 
