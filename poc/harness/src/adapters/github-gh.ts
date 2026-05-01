@@ -6,6 +6,7 @@ import type {
   HarnessIssue,
   HarnessPullRequest,
   ReviewState,
+  MergeabilityState,
 } from '../types';
 
 const execFileAsync = promisify(execFile);
@@ -161,6 +162,42 @@ export class GitHubGhAdapter implements GitHubPort {
     ]);
   }
 
+  async removeIssueBlockedBy(
+    repo: string,
+    issueNumber: number,
+    blockingIssueNumber: number
+  ): Promise<void> {
+    const blockingIssue = await ghJson<GhIssue>([
+      'api',
+      '-H',
+      'Accept: application/vnd.github+json',
+      '-H',
+      'X-GitHub-Api-Version: 2026-03-10',
+      `repos/${repo}/issues/${String(blockingIssueNumber)}`,
+    ]);
+    if (!blockingIssue.id) {
+      throw new Error(`Could not read REST issue id for #${String(blockingIssueNumber)}`);
+    }
+
+    try {
+      await gh([
+        'api',
+        '--method',
+        'DELETE',
+        '-H',
+        'Accept: application/vnd.github+json',
+        '-H',
+        'X-GitHub-Api-Version: 2026-03-10',
+        `repos/${repo}/issues/${String(issueNumber)}/dependencies/blocked_by/${String(
+          blockingIssue.id
+        )}`,
+      ]);
+    } catch (error) {
+      const message = String(error);
+      if (!message.includes('404') && !message.includes('Not Found')) throw error;
+    }
+  }
+
   async ensureLabel(repo: string, name: string, color = '5319e7'): Promise<void> {
     const labels = await ghJson<GhLabel[]>([
       'label',
@@ -265,6 +302,7 @@ function mapPullRequest(pr: GhPullRequest): HarnessPullRequest {
     checks: mapCheckState(pr.statusCheckRollup),
     review: mapReviewState(pr.reviewDecision),
     mergeable: pr.mergeable === 'MERGEABLE',
+    mergeability: mapMergeabilityState(pr.mergeable),
   };
 }
 
@@ -306,6 +344,12 @@ function mapReviewState(reviewDecision: string): ReviewState {
   if (reviewDecision === 'CHANGES_REQUESTED') return 'changes_requested';
   if (reviewDecision === 'APPROVED') return 'approved';
   return 'none';
+}
+
+function mapMergeabilityState(mergeable: string): MergeabilityState {
+  if (mergeable === 'MERGEABLE') return 'mergeable';
+  if (mergeable === 'CONFLICTING') return 'conflicting';
+  return 'unknown';
 }
 
 function isGhNotFound(error: unknown): boolean {

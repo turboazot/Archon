@@ -64,6 +64,17 @@ export class InMemoryGitHub implements GitHubPort {
     issue.labels = issue.labels.filter(candidate => candidate !== label);
   }
 
+  async removeIssueBlockedBy(
+    _repo: string,
+    issueNumber: number,
+    blockingIssueNumber: number
+  ): Promise<void> {
+    const issue = this.requireIssue(issueNumber);
+    issue.blockedByIssueNumbers = issue.blockedByIssueNumbers.filter(
+      candidate => candidate !== blockingIssueNumber
+    );
+  }
+
   async addIssueComment(_repo: string, issueNumber: number, body: string): Promise<void> {
     this.requireIssue(issueNumber);
     if (this.comments.some(comment => comment.issueNumber === issueNumber && comment.body === body))
@@ -190,6 +201,7 @@ export function makePullRequest(
     checks: 'pending',
     review: 'none',
     mergeable: true,
+    mergeability: 'mergeable',
     ...overrides,
   };
 }

@@ -8,6 +8,8 @@ export type CheckState = 'pending' | 'passing' | 'failing';
 
 export type ReviewState = 'none' | 'approved' | 'changes_requested';
 
+export type MergeabilityState = 'mergeable' | 'conflicting' | 'unknown';
+
 export type OrchestratorRunStatus =
   | 'queued'
   | 'running'
@@ -15,6 +17,7 @@ export type OrchestratorRunStatus =
   | 'ready_for_review'
   | 'needs_fix'
   | 'fix_running'
+  | 'conflict_running'
   | 'blocked'
   | 'done'
   | 'failed'
@@ -40,6 +43,7 @@ export interface HarnessPullRequest {
   checks: CheckState;
   review: ReviewState;
   mergeable: boolean;
+  mergeability: MergeabilityState;
 }
 
 export interface HarnessWorkflowRun {
@@ -77,6 +81,11 @@ export interface GitHubPort {
   findPullRequestByBranch(repo: string, branch: string): Promise<HarnessPullRequest | undefined>;
   addIssueLabel(repo: string, issueNumber: number, label: string): Promise<void>;
   removeIssueLabel(repo: string, issueNumber: number, label: string): Promise<void>;
+  removeIssueBlockedBy(
+    repo: string,
+    issueNumber: number,
+    blockingIssueNumber: number
+  ): Promise<void>;
   addIssueComment(repo: string, issueNumber: number, body: string): Promise<void>;
   mergePullRequest(repo: string, prNumber: number): Promise<void>;
 }
@@ -98,7 +107,7 @@ export interface StartWorkflowInput {
   workflowName: string;
   branch?: string;
   prNumber?: number;
-  mode: 'implement' | 'fix';
+  mode: 'implement' | 'fix' | 'conflict';
 }
 
 export interface HarnessOrchestratorConfig {
@@ -109,6 +118,7 @@ export interface HarnessOrchestratorConfig {
   autoMergeEnabled: boolean;
   maxRunAttempts: number;
   maxFixAttempts: number;
+  conflictWorkflowName: string;
   areaLockPolicy: AreaLockPolicy;
   workflowLabelToName: Record<string, string>;
   now: () => Date;

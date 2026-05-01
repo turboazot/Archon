@@ -19,4 +19,8 @@ export const TERMINAL_RUN_STATUSES = new Set<OrchestratorRunStatus>([
   'abandoned',
 ]);
 
-export const ACTIVE_RUN_STATUSES = new Set<OrchestratorRunStatus>(['running', 'fix_running']);
+export const ACTIVE_RUN_STATUSES = new Set<OrchestratorRunStatus>([
+  'running',
+  'fix_running',
+  'conflict_running',
+]);

@@ -29,6 +29,7 @@ export type {
   HarnessOrchestratorPorts,
   HarnessPullRequest,
   HarnessWorkflowRun,
+  MergeabilityState,
   OrchestratorRunStatus,
   OrchestratorStore,
   PullRequestState,
@@ -72,7 +73,12 @@ export class HarnessOrchestrator {
     const runs = await this.store.listRuns(this.config.repo);
     for (const run of runs) {
       if (TERMINAL_RUN_STATUSES.has(run.status)) continue;
-      if (run.status !== 'running' && run.status !== 'fix_running') continue;
+      if (
+        run.status !== 'running' &&
+        run.status !== 'fix_running' &&
+        run.status !== 'conflict_running'
+      )
+        continue;
 
       const workflowRun = await this.archon.getWorkflowRun(run.workflowRunId);
       if (!workflowRun || workflowRun.state === 'running') continue;
@@ -151,6 +157,11 @@ export class HarnessOrchestrator {
 
       if (pr.state === 'closed') {
         await this.markRunFailed(run, issue, `PR #${pr.number} closed without merge`);
+        continue;
+      }
+
+      if (pr.mergeability === 'conflicting') {
+        await this.handlePrConflict(run, issue, pr);
         continue;
       }
 
@@ -241,6 +252,54 @@ export class HarnessOrchestrator {
     );
   }
 
+  private async handlePrConflict(
+    run: StoredOrchestratorRun,
+    issue: HarnessIssue,
+    pr: HarnessPullRequest
+  ): Promise<void> {
+    await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.needsFix);
+
+    if (run.status === 'conflict_running') {
+      return;
+    }
+
+    if (run.fixAttempts >= this.config.maxFixAttempts) {
+      await this.transitionRun(run, {
+        status: 'needs_fix',
+        lastError: `PR #${pr.number} has merge conflicts and retry budget is exhausted`,
+      });
+      await this.commentOnce(
+        run,
+        issue.number,
+        'conflict-retry-exhausted',
+        `PR #${pr.number} has merge conflicts, but the retry budget is exhausted.`
+      );
+      return;
+    }
+
+    const conflictWorkflow = await this.archon.startWorkflow({
+      repo: this.config.repo,
+      issue,
+      workflowName: this.config.conflictWorkflowName,
+      branch: run.branch,
+      prNumber: pr.number,
+      mode: 'conflict',
+    });
+
+    await this.transitionRun(run, {
+      workflowRunId: conflictWorkflow.id,
+      status: 'conflict_running',
+      fixAttempts: run.fixAttempts + 1,
+      lastError: `PR #${pr.number} has merge conflicts`,
+    });
+    await this.commentOnce(
+      run,
+      issue.number,
+      `conflict-${run.fixAttempts + 1}`,
+      `Scheduled conflict resolution attempt ${run.fixAttempts + 1} for PR #${pr.number}.`
+    );
+  }
+
   private async scheduleReadyIssues(
     issues: HarnessIssue[],
     runs: StoredOrchestratorRun[],
@@ -319,7 +378,9 @@ export class HarnessOrchestrator {
     };
 
     await this.store.createRun(run);
+    await this.clearResolvedDependencies(issue);
     await this.github.removeIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.ready);
+    await this.github.removeIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.blocked);
     await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.inProgress);
     await this.commentOnce(
       run,
@@ -334,6 +395,14 @@ export class HarnessOrchestrator {
     if (issue.labels.includes(LIFECYCLE_LABELS.blocked)) return;
     await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.blocked);
     await this.github.addIssueComment(this.config.repo, issue.number, reason);
+  }
+
+  private async clearResolvedDependencies(issue: HarnessIssue): Promise<void> {
+    for (const blockingIssueNumber of issue.blockedByIssueNumbers) {
+      const blockingIssue = await this.github.getIssue(this.config.repo, blockingIssueNumber);
+      if (blockingIssue?.state !== 'closed') continue;
+      await this.github.removeIssueBlockedBy(this.config.repo, issue.number, blockingIssueNumber);
+    }
   }
 
   private async markRunFailed(

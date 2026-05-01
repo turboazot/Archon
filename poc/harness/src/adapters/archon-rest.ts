@@ -248,6 +248,22 @@ export class ArchonRestAdapter implements ArchonPort {
 
 function buildWorkflowPrompt(input: StartWorkflowInput, branch: string, sessionId: string): string {
   const prLine = input.prNumber ? `PR: #${String(input.prNumber)}\n` : '';
+  if (input.mode === 'conflict') {
+    return [
+      `[archon-e2e:${sessionId}]`,
+      `Resolve merge conflicts for PR #${String(input.prNumber)}.`,
+      `Repository: ${input.repo}`,
+      `Issue: #${String(input.issue.number)} ${input.issue.title}`,
+      prLine.trimEnd(),
+      `Mode: ${input.mode}`,
+      `Use branch: ${branch}`,
+      '',
+      input.issue.body,
+    ]
+      .filter(line => line.length > 0)
+      .join('\n');
+  }
+
   return [
     `[archon-e2e:${sessionId}]`,
     `Repository: ${input.repo}`,

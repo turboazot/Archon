@@ -404,6 +404,85 @@ describe('HarnessOrchestrator', () => {
     expect(runs[0]?.lastError).toBe('Review requested changes');
   });
 
+  test('scenario 12b: schedules conflict workflow when an open PR has merge conflicts', async () => {
+    const { github, archon, store, orchestrator } = createHarness({
+      issues: [
+        makeIssue({
+          number: 1,
+          labels: ['archon:ready', 'archon-workflow:fix-issue'],
+        }),
+      ],
+    });
+
+    await orchestrator.reconcileOnce();
+    const workflowRun = archon.getStartedRuns()[0];
+    archon.completeRun(workflowRun.id, 'succeeded');
+    github.addPullRequest(
+      makePullRequest({
+        number: 10,
+        issueNumber: 1,
+        branch: workflowRun.branch,
+        checks: 'passing',
+        mergeable: false,
+        mergeability: 'conflicting',
+      })
+    );
+
+    await orchestrator.reconcileOnce();
+    await orchestrator.reconcileOnce();
+    const runs = await store.listRuns(repo);
+    const issue = await github.getIssue(repo, 1);
+
+    expect(archon.getStartedRuns()).toHaveLength(2);
+    expect(archon.getStartedRuns()[1]?.workflowName).toBe('archon-resolve-conflicts');
+    expect(runs[0]?.status).toBe('conflict_running');
+    expect(runs[0]?.fixAttempts).toBe(1);
+    expect(runs[0]?.lastError).toBe('PR #10 has merge conflicts');
+    expect(issue?.labels).toContain('archon:needs-fix');
+    expect(
+      github
+        .getComments(1)
+        .some(comment => comment.body.includes('Scheduled conflict resolution attempt 1'))
+    ).toBe(true);
+  });
+
+  test('scenario 12c: resumes PR validation after conflict workflow completes', async () => {
+    const { github, archon, store, orchestrator } = createHarness({
+      issues: [
+        makeIssue({
+          number: 1,
+          labels: ['archon:ready', 'archon-workflow:fix-issue'],
+        }),
+      ],
+    });
+
+    await orchestrator.reconcileOnce();
+    const implementationRun = archon.getStartedRuns()[0];
+    archon.completeRun(implementationRun.id, 'succeeded');
+    github.addPullRequest(
+      makePullRequest({
+        number: 10,
+        issueNumber: 1,
+        branch: implementationRun.branch,
+        checks: 'passing',
+        mergeable: false,
+        mergeability: 'conflicting',
+      })
+    );
+
+    await orchestrator.reconcileOnce();
+    await orchestrator.reconcileOnce();
+    const conflictRun = archon.getStartedRuns()[1];
+    archon.completeRun(conflictRun.id, 'succeeded');
+    github.updatePullRequest(10, { mergeable: true, mergeability: 'mergeable' });
+
+    await orchestrator.reconcileOnce();
+    const runs = await store.listRuns(repo);
+
+    expect(runs[0]?.status).toBe('ready_for_review');
+    expect(runs[0]?.prNumber).toBe(10);
+  });
+
   test('scenario 13: approved PR without auto-merge waits for human merge', async () => {
     const { github, archon, orchestrator } = createHarness({
       issues: [
@@ -532,9 +611,15 @@ describe('HarnessOrchestrator', () => {
     const blockedReport = await orchestrator.reconcileOnce();
     github.closeIssue(1);
     const unblockedReport = await orchestrator.reconcileOnce();
+    const secondIssue = await github.getIssue(repo, 2);
+    const thirdIssue = await github.getIssue(repo, 3);
 
     expect(blockedReport.blockedIssues.map(blocked => blocked.issue.number)).toEqual([2, 3]);
     expect(unblockedReport.startedRuns.map(run => run.issueNumber)).toEqual([2, 3]);
+    expect(secondIssue?.blockedByIssueNumbers).toEqual([]);
+    expect(thirdIssue?.blockedByIssueNumbers).toEqual([]);
+    expect(secondIssue?.labels).not.toContain('archon:blocked');
+    expect(thirdIssue?.labels).not.toContain('archon:blocked');
     expect(archon.getStartedRuns().map(run => run.workflowName)).toEqual([
       'archon-e2e-tiny-self-merge',
       'archon-e2e-tiny-self-merge',

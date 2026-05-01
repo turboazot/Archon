@@ -11,6 +11,7 @@ export function createDefaultHarnessConfig(
     autoMergeEnabled: false,
     maxRunAttempts: 2,
     maxFixAttempts: 2,
+    conflictWorkflowName: 'archon-resolve-conflicts',
     areaLockPolicy: 'conservative',
     workflowLabelToName: {
       'archon-workflow:ralph': 'archon-ralph-dag',
