@@ -487,6 +487,85 @@ describe('HarnessOrchestrator', () => {
     expect(runs[0]?.prNumber).toBe(10);
   });
 
+  test('scenario 12d: handles merge-step failure when the workflow already opened a conflicting PR', async () => {
+    const { github, archon, store, orchestrator } = createHarness({
+      issues: [
+        makeIssue({
+          number: 1,
+          labels: ['archon:ready', 'archon-workflow:fix-issue-simple', 'archon:auto-merge'],
+        }),
+      ],
+    });
+
+    await orchestrator.reconcileOnce();
+    const implementationRun = archon.getStartedRuns()[0];
+    github.addPullRequest(
+      makePullRequest({
+        number: 10,
+        issueNumber: 1,
+        branch: implementationRun.branch,
+        checks: 'passing',
+        mergeable: false,
+        mergeability: 'conflicting',
+      })
+    );
+    archon.completeRun(implementationRun.id, 'failed', 'Pull request is not mergeable');
+
+    await orchestrator.reconcileOnce();
+    await orchestrator.reconcileOnce();
+    const runs = await store.listRuns(repo);
+    const issue = await github.getIssue(repo, 1);
+
+    expect(archon.getStartedRuns()).toHaveLength(2);
+    expect(archon.getStartedRuns()[1]?.workflowName).toBe('archon-resolve-conflicts');
+    expect(runs[0]?.status).toBe('conflict_running');
+    expect(runs[0]?.lastError).toBe('PR #10 has merge conflicts');
+    expect(issue?.labels).toContain('archon:needs-fix');
+  });
+
+  test('scenario 12e: auto-merges after conflict workflow resolves an eligible PR', async () => {
+    const { github, archon, store, orchestrator } = createHarness(
+      {
+        issues: [
+          makeIssue({
+            number: 1,
+            labels: ['archon:ready', 'archon-workflow:fix-issue-simple', 'archon:auto-merge'],
+          }),
+        ],
+      },
+      { autoMergeEnabled: true }
+    );
+
+    await orchestrator.reconcileOnce();
+    const implementationRun = archon.getStartedRuns()[0];
+    github.addPullRequest(
+      makePullRequest({
+        number: 10,
+        issueNumber: 1,
+        branch: implementationRun.branch,
+        checks: 'passing',
+        mergeable: false,
+        mergeability: 'conflicting',
+      })
+    );
+    archon.completeRun(implementationRun.id, 'failed', 'Pull request is not mergeable');
+
+    await orchestrator.reconcileOnce();
+    await orchestrator.reconcileOnce();
+    const conflictRun = archon.getStartedRuns()[1];
+    archon.completeRun(conflictRun.id, 'succeeded');
+    github.updatePullRequest(10, { mergeable: true, mergeability: 'mergeable' });
+
+    const mergeReport = await orchestrator.reconcileOnce();
+    await orchestrator.reconcileOnce();
+    const prs = await github.listPullRequests(repo);
+    const runs = await store.listRuns(repo);
+
+    expect(mergeReport.autoMergeCandidates.map(pr => pr.number)).toEqual([10]);
+    expect(prs[0]?.state).toBe('merged');
+    expect(runs[0]?.status).toBe('done');
+  });
+
   test('scenario 13: approved PR without auto-merge waits for human merge', async () => {
     const { github, archon, orchestrator } = createHarness({
       issues: [

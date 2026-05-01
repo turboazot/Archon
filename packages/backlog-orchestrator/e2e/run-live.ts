@@ -15,7 +15,12 @@ const TINY_ROUTING_LABEL = 'archon-workflow:e2e-tiny';
 const SELF_MERGE_ROUTING_LABEL = 'archon-workflow:e2e-tiny-self-merge';
 const SIMPLE_FIX_ROUTING_LABEL = 'archon-workflow:fix-issue-simple';
 const ISSUE_SIZES = ['tiny', 'small'] as const;
-const SCENARIOS = ['single', 'blocked-parallel', 'ecommerce-app'] as const;
+const SCENARIOS = [
+  'single',
+  'blocked-parallel',
+  'ecommerce-app',
+  'ecommerce-app-auto-merge',
+] as const;
 
 type IssueSize = (typeof ISSUE_SIZES)[number];
 type LiveScenario = (typeof SCENARIOS)[number];
@@ -233,7 +238,7 @@ function parseArgs(argv: string[]): LiveArgs {
     }
   }
 
-  const resolvedCycles = cycles ?? (scenario === 'ecommerce-app' ? 120 : 3);
+  const resolvedCycles = cycles ?? (isEcommerceScenario(scenario) ? 120 : 3);
   if (!Number.isInteger(resolvedCycles) || resolvedCycles < 1 || resolvedCycles > 240) {
     throw new Error('--cycles must be an integer from 1 to 240');
   }
@@ -313,8 +318,10 @@ async function createScenarioIssues(
     return [issue];
   }
 
-  if (args.scenario === 'ecommerce-app') {
-    return createEcommerceAppIssues(github, args);
+  if (isEcommerceScenario(args.scenario)) {
+    return createEcommerceAppIssues(github, args, {
+      autoMergeAll: args.scenario === 'ecommerce-app-auto-merge',
+    });
   }
 
   const skeleton = await github.createIssue({
@@ -410,8 +417,20 @@ async function loadExistingScenarioIssues(input: {
 
 async function createEcommerceAppIssues(
   github: GitHubGhAdapter,
-  args: LiveArgs
+  args: LiveArgs,
+  options: { autoMergeAll: boolean }
 ): Promise<HarnessIssue[]> {
+  const issueLabels = (autoMerge: boolean): string[] => [
+    E2E_LABEL,
+    LIFECYCLE_LABELS.ready,
+    SIMPLE_FIX_ROUTING_LABEL,
+    ...(autoMerge ? [LIFECYCLE_LABELS.autoMerge] : []),
+    'area:e2e',
+  ];
+  const prMergeInstruction = options.autoMergeAll
+    ? 'Open a PR and allow Archon to merge it automatically after verification.'
+    : 'Open a PR but do not auto-merge this issue.';
+
   const skeleton = await github.createIssue({
     repo: args.repo,
     title: `[archon-e2e:${args.sessionId}] Ecommerce app skeleton`,
@@ -426,13 +445,7 @@ async function createEcommerceAppIssues(
         'Keep the implementation focused on the ecommerce app and avoid generated build/dependency output in git.',
       ],
     }),
-    labels: [
-      E2E_LABEL,
-      LIFECYCLE_LABELS.ready,
-      SIMPLE_FIX_ROUTING_LABEL,
-      LIFECYCLE_LABELS.autoMerge,
-      'area:e2e',
-    ],
+    labels: issueLabels(true),
   });
 
   const catalog = await github.createIssue({
@@ -447,10 +460,10 @@ async function createEcommerceAppIssues(
         'Choose appropriate files and function boundaries based on the skeleton implementation.',
         'Add focused tests for the catalog behavior.',
         'Wire the catalog behavior into the existing storefront UI while minimizing conflicts with cart/checkout work.',
-        'Open a PR but do not auto-merge this issue.',
+        prMergeInstruction,
       ],
     }),
-    labels: [E2E_LABEL, LIFECYCLE_LABELS.ready, SIMPLE_FIX_ROUTING_LABEL, 'area:e2e'],
+    labels: issueLabels(options.autoMergeAll),
   });
 
   const cartCheckout = await github.createIssue({
@@ -466,10 +479,10 @@ async function createEcommerceAppIssues(
         'Choose appropriate files and function boundaries based on the skeleton implementation.',
         'Add focused tests for cart and checkout behavior.',
         'Wire cart and checkout behavior into the existing storefront UI while minimizing conflicts with catalog work.',
-        'Open a PR but do not auto-merge this issue.',
+        prMergeInstruction,
       ],
     }),
-    labels: [E2E_LABEL, LIFECYCLE_LABELS.ready, SIMPLE_FIX_ROUTING_LABEL, 'area:e2e'],
+    labels: issueLabels(options.autoMergeAll),
   });
 
   await github.addIssueBlockedBy(args.repo, catalog.number, skeleton.number);
@@ -592,6 +605,16 @@ async function isScenarioComplete(input: {
     );
   }
 
+  if (input.args.scenario === 'ecommerce-app-auto-merge') {
+    return (
+      runs.length >= input.issues.length &&
+      input.issues.every(issue =>
+        runs.some(run => run.issueNumber === issue.number && run.status === 'done')
+      ) &&
+      issues.every(issue => issue?.state === 'closed')
+    );
+  }
+
   if (input.args.scenario === 'blocked-parallel') {
     return (
       runs.length >= input.issues.length &&
@@ -612,13 +635,13 @@ async function isScenarioComplete(input: {
 
 function parallelScenarioLimit(scenario: LiveScenario): number {
   if (scenario === 'blocked-parallel') return 3;
-  if (scenario === 'ecommerce-app') return 3;
+  if (isEcommerceScenario(scenario)) return 3;
   return 1;
 }
 
 function maxNewRunsPerCycle(scenario: LiveScenario): number {
   if (scenario === 'blocked-parallel') return 2;
-  if (scenario === 'ecommerce-app') return 2;
+  if (isEcommerceScenario(scenario)) return 2;
   return 1;
 }
 
@@ -628,6 +651,10 @@ function isIssueSize(value: string): value is IssueSize {
 
 function isScenario(value: string): value is LiveScenario {
   return SCENARIOS.includes(value as LiveScenario);
+}
+
+function isEcommerceScenario(scenario: LiveScenario): boolean {
+  return scenario === 'ecommerce-app' || scenario === 'ecommerce-app-auto-merge';
 }
 
 function validateEnv(): {

@@ -91,13 +91,17 @@ export class HarnessOrchestrator {
         (await this.github.getIssue(this.config.repo, run.issueNumber));
       if (!issue) continue;
 
-      if (workflowRun.state === 'failed' || workflowRun.state === 'cancelled') {
-        await this.markRunFailed(run, issue, workflowRun.error ?? `Workflow ${workflowRun.state}`);
-        continue;
-      }
-
       const pr = await this.github.findPullRequestByBranch(this.config.repo, run.branch);
       if (!pr) {
+        if (workflowRun.state === 'failed' || workflowRun.state === 'cancelled') {
+          await this.markRunFailed(
+            run,
+            issue,
+            workflowRun.error ?? `Workflow ${workflowRun.state}`
+          );
+          continue;
+        }
+
         await this.markRunFailed(
           run,
           issue,
@@ -117,6 +121,10 @@ export class HarnessOrchestrator {
         prNumber: pr.number,
         status: 'pr_open',
         changedFiles: pr.changedFiles,
+        lastError:
+          workflowRun.state === 'failed' || workflowRun.state === 'cancelled'
+            ? (workflowRun.error ?? `Workflow ${workflowRun.state}`)
+            : run.lastError,
       });
       await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.prOpen);
       await this.commentOnce(
