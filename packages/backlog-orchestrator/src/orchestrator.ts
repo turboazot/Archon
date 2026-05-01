@@ -84,7 +84,6 @@ export class HarnessOrchestrator {
         continue;
 
       const workflowRun = await this.archon.getWorkflowRun(run.workflowRunId);
-      if (!workflowRun || workflowRun.state === 'running') continue;
 
       const issue =
         issues.find(candidate => candidate.number === run.issueNumber) ??
@@ -92,47 +91,51 @@ export class HarnessOrchestrator {
       if (!issue) continue;
 
       const pr = await this.github.findPullRequestByBranch(this.config.repo, run.branch);
-      if (!pr) {
-        if (workflowRun.state === 'failed' || workflowRun.state === 'cancelled') {
-          await this.markRunFailed(
+      if (pr) {
+        const shouldAdoptOpenPr =
+          run.prNumber === undefined ||
+          (run.status === 'running' && workflowRun?.state === 'running');
+        if (shouldAdoptOpenPr) {
+          await this.transitionRun(run, {
+            prNumber: pr.number,
+            status: 'pr_open',
+            changedFiles: pr.changedFiles,
+            lastError:
+              workflowRun && (workflowRun.state === 'failed' || workflowRun.state === 'cancelled')
+                ? (workflowRun.error ?? `Workflow ${workflowRun.state}`)
+                : run.lastError,
+          });
+          await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.prOpen);
+          await this.commentOnce(
             run,
-            issue,
-            workflowRun.error ?? `Workflow ${workflowRun.state}`
+            issue.number,
+            'pr-opened',
+            `PR #${pr.number} is open for ${run.branch}.`
           );
-          continue;
         }
-
-        await this.markRunFailed(
-          run,
-          issue,
-          `Workflow completed but no PR was found for ${run.branch}`
-        );
-        await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.blocked);
-        await this.commentOnce(
-          run,
-          issue.number,
-          'missing-pr',
-          `Workflow completed, but no PR was found for branch ${run.branch}.`
-        );
         continue;
       }
 
-      await this.transitionRun(run, {
-        prNumber: pr.number,
-        status: 'pr_open',
-        changedFiles: pr.changedFiles,
-        lastError:
-          workflowRun.state === 'failed' || workflowRun.state === 'cancelled'
-            ? (workflowRun.error ?? `Workflow ${workflowRun.state}`)
-            : run.lastError,
-      });
-      await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.prOpen);
+      if (!workflowRun || workflowRun.state === 'running') continue;
+
+      if (workflowRun.state === 'failed' || workflowRun.state === 'cancelled') {
+        await this.markRunFailed(run, issue, workflowRun.error ?? `Workflow ${workflowRun.state}`);
+        continue;
+      }
+
+      await this.markRunFailed(
+        run,
+        issue,
+        `Workflow completed but no PR was found for ${run.branch}`
+      );
+      await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.blocked);
       await this.commentOnce(
         run,
         issue.number,
-        'pr-opened',
-        `PR #${pr.number} is open for ${run.branch}.`
+        'missing-pr',
+        `Workflow completed, but no PR was found for branch ${run.branch}.`
       );
+      continue;
     }
   }
 
