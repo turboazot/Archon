@@ -9,6 +9,7 @@ import type {
 interface ArchonRestOptions {
   baseUrl: string;
   codebaseUrl: string;
+  codebaseCwd?: string;
   sessionId: string;
   branchName?: string;
   token?: string;
@@ -55,6 +56,7 @@ interface StartedRunMetadata {
 export class ArchonRestAdapter implements ArchonPort {
   private readonly baseUrl: string;
   private readonly codebaseUrl: string;
+  private readonly codebaseCwd?: string;
   private readonly sessionId: string;
   private readonly branchName?: string;
   private readonly token?: string;
@@ -66,6 +68,7 @@ export class ArchonRestAdapter implements ArchonPort {
   constructor(options: ArchonRestOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.codebaseUrl = options.codebaseUrl;
+    this.codebaseCwd = options.codebaseCwd;
     this.sessionId = options.sessionId;
     this.branchName = options.branchName;
     this.token = options.token;
@@ -136,7 +139,7 @@ export class ArchonRestAdapter implements ArchonPort {
     const existing = codebases.find(
       codebase =>
         normalizeRepoUrl(codebase.repository_url ?? '') === normalizedTarget ||
-        codebase.default_cwd.endsWith('/X15')
+        (this.codebaseCwd !== undefined && codebase.default_cwd === this.codebaseCwd)
     );
     if (existing) {
       this.codebaseId = existing.id;

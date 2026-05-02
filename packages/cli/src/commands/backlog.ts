@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import { isAbsolute, resolve } from 'path';
 import { promisify } from 'util';
 import {
   BacklogOrchestrator,
@@ -16,6 +17,7 @@ import {
 import { GitHubGhAdapter } from '@archon/backlog-orchestrator/adapters/github-gh';
 import { loadConfig } from '@archon/core/config';
 import * as workflowDb from '@archon/core/db/workflows';
+import type { BacklogProjectConfig, MergedConfig } from '@archon/core/config';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { workflowRunCommand } from './workflow';
 
@@ -28,7 +30,7 @@ export interface BacklogCommandOptions {
 }
 
 export async function backlogSetupCommand(cwd: string): Promise<void> {
-  const { github, config } = await createBacklogRuntime(cwd);
+  const runtimes = await createBacklogRuntimes(cwd);
   const labels = [
     LIFECYCLE_LABELS.ready,
     LIFECYCLE_LABELS.inProgress,
@@ -40,36 +42,46 @@ export async function backlogSetupCommand(cwd: string): Promise<void> {
     LIFECYCLE_LABELS.autoMerge,
   ];
 
-  for (const label of labels) {
-    await github.ensureLabel(config.repo, label);
-  }
+  for (const runtime of runtimes) {
+    for (const label of labels) {
+      await runtime.github.ensureLabel(runtime.config.repo, label);
+    }
 
-  const repoInfo = await github.getRepositoryInfo(config.repo);
-  console.log(`Backlog labels are ready for ${config.repo}.`);
-  console.log(`Default branch: ${repoInfo.defaultBranch}`);
-  if (config.baseBranch && config.baseBranch !== repoInfo.defaultBranch) {
-    console.log(
-      `Warning: configured base branch ${config.baseBranch} differs from GitHub default ${repoInfo.defaultBranch}; linked PRs will not auto-close issues.`
-    );
+    const repoInfo = await runtime.github.getRepositoryInfo(runtime.config.repo);
+    console.log(`Backlog labels are ready for ${runtime.config.repo}.`);
+    console.log(`Project: ${runtime.projectName}`);
+    console.log(`Default branch: ${repoInfo.defaultBranch}`);
+    if (runtime.config.baseBranch && runtime.config.baseBranch !== repoInfo.defaultBranch) {
+      console.log(
+        `Warning: configured base branch ${runtime.config.baseBranch} differs from GitHub default ${repoInfo.defaultBranch}; linked PRs will not auto-close issues.`
+      );
+    }
   }
 }
 
 export async function backlogReconcileCommand(cwd: string): Promise<void> {
-  const runtime = await createBacklogRuntime(cwd);
-  const report = await runtime.orchestrator.reconcileOnce();
-  printReport(report);
-  await runtime.archon.drainStartedWorkflows();
+  const runtimes = await createBacklogRuntimes(cwd);
+  for (const runtime of runtimes) {
+    console.log(`\nBacklog reconcile for ${runtime.config.repo} (${runtime.projectName})`);
+    const report = await runtime.orchestrator.reconcileOnce();
+    printReport(report);
+    await runtime.archon.drainStartedWorkflows();
+  }
 }
 
 export async function backlogRunCommand(options: BacklogCommandOptions): Promise<void> {
-  const runtime = await createBacklogRuntime(options.cwd);
   const cycles = options.cycles ?? Number.POSITIVE_INFINITY;
   const pollIntervalSeconds = options.pollIntervalSeconds ?? 60;
 
   for (let cycle = 1; cycle <= cycles; cycle += 1) {
     console.log(`\nBacklog reconcile cycle ${String(cycle)}`);
-    const report = await runtime.orchestrator.reconcileOnce();
-    printReport(report);
+    const runtimes = await createBacklogRuntimes(options.cwd);
+    for (const runtime of runtimes) {
+      console.log(`\nProject: ${runtime.projectName}`);
+      console.log(`Repo: ${runtime.config.repo}`);
+      const report = await runtime.orchestrator.reconcileOnce();
+      printReport(report);
+    }
 
     if (cycle >= cycles) break;
     await sleep(pollIntervalSeconds * 1000);
@@ -77,48 +89,110 @@ export async function backlogRunCommand(options: BacklogCommandOptions): Promise
 }
 
 export async function backlogStatusCommand(cwd: string): Promise<void> {
-  const { config, store, github } = await createBacklogRuntime(cwd);
-  const runs = await store.listRuns(config.repo);
-  const repoInfo = await github.getRepositoryInfo(config.repo);
-  console.log(`Backlog status for ${config.repo}`);
-  console.log(`Default branch: ${repoInfo.defaultBranch}`);
-  if (repoInfo.autoCloseIssuesEnabled === false) {
-    console.log('Warning: GitHub auto-close for merged linked PRs appears disabled.');
-  }
-  if (runs.length === 0) {
-    console.log('No backlog orchestrator runs recorded.');
-    return;
-  }
-  for (const run of runs) {
-    const pr = run.prNumber ? ` PR #${String(run.prNumber)}` : '';
-    const error = run.lastError ? ` (${run.lastError})` : '';
-    console.log(
-      `#${String(run.issueNumber)} ${run.status}${pr} ${run.workflowLabel} ${run.branch}${error}`
-    );
+  const runtimes = await createBacklogRuntimes(cwd);
+  for (const { projectName, config, store, github } of runtimes) {
+    const runs = await store.listRuns(config.repo);
+    const repoInfo = await github.getRepositoryInfo(config.repo);
+    console.log(`Backlog status for ${config.repo}`);
+    console.log(`Project: ${projectName}`);
+    console.log(`Default branch: ${repoInfo.defaultBranch}`);
+    if (repoInfo.autoCloseIssuesEnabled === false) {
+      console.log('Warning: GitHub auto-close for merged linked PRs appears disabled.');
+    }
+    if (runs.length === 0) {
+      console.log('No backlog orchestrator runs recorded.');
+      continue;
+    }
+    for (const run of runs) {
+      const pr = run.prNumber ? ` PR #${String(run.prNumber)}` : '';
+      const error = run.lastError ? ` (${run.lastError})` : '';
+      console.log(
+        `#${String(run.issueNumber)} ${run.status}${pr} ${run.workflowLabel} ${run.branch}${error}`
+      );
+    }
   }
 }
 
-async function createBacklogRuntime(cwd: string): Promise<{
+interface BacklogRuntime {
+  projectName: string;
   config: HarnessOrchestratorConfig;
   github: GitHubGhAdapter;
   store: DbBacklogOrchestratorStore;
   archon: CliWorkflowArchonPort;
   orchestrator: BacklogOrchestrator;
-}> {
+}
+
+async function createBacklogRuntimes(cwd: string): Promise<BacklogRuntime[]> {
   const mergedConfig = await loadConfig(cwd);
-  const repo = mergedConfig.backlog?.repo ?? (await getCurrentGitHubRepo(cwd));
+  const configuredProjects = normalizeBacklogProjects(mergedConfig.backlog?.projects);
+  if (configuredProjects.length > 0) {
+    const runtimes: BacklogRuntime[] = [];
+    for (const project of configuredProjects) {
+      runtimes.push(await createBacklogRuntime(cwd, project, mergedConfig));
+    }
+    return runtimes;
+  }
+
+  if (mergedConfig.backlog?.repo) {
+    return [
+      await createBacklogRuntime(
+        cwd,
+        { name: 'configured repo', repo: mergedConfig.backlog.repo, cwd },
+        mergedConfig
+      ),
+    ];
+  }
+
+  return [
+    await createBacklogRuntime(
+      cwd,
+      { name: 'current repo', repo: await getCurrentGitHubRepo(cwd), cwd },
+      mergedConfig
+    ),
+  ];
+}
+
+async function createBacklogRuntime(
+  serviceCwd: string,
+  project: BacklogProjectConfig,
+  serviceConfig: MergedConfig
+): Promise<BacklogRuntime> {
+  const projectCwd = resolveProjectCwd(serviceCwd, project.cwd);
+  const projectConfig = projectCwd === serviceCwd ? serviceConfig : await loadConfig(projectCwd);
+  const serviceBacklog = serviceConfig.backlog ?? {};
+  const projectBacklog = projectConfig.backlog ?? {};
+  const serviceBacklogConfig = backlogHarnessConfig(serviceBacklog);
+  const projectBacklogConfig = backlogHarnessConfig(projectBacklog);
+  const { repo, workflowLabelToName: projectWorkflowLabels } = project;
+  const projectConfigOverrides = backlogHarnessConfig(project);
+  const workflowLabelToName = {
+    ...serviceBacklog.workflowLabelToName,
+    ...projectBacklog.workflowLabelToName,
+    ...projectWorkflowLabels,
+  };
   const config = createDefaultHarnessConfig({
-    ...mergedConfig.backlog,
+    ...serviceBacklogConfig,
+    ...projectBacklogConfig,
+    ...projectConfigOverrides,
     repo,
-    baseBranch: mergedConfig.baseBranch,
+    baseBranch:
+      projectConfigOverrides.baseBranch ??
+      projectConfig.baseBranch ??
+      (projectCwd === serviceCwd ? serviceConfig.baseBranch : undefined),
+    workflowLabelToName,
   });
-  const github = new GitHubGhAdapter({
-    allowMerge: process.env.ARCHON_BACKLOG_ALLOW_MERGE === '1',
-  });
+  const github = new GitHubGhAdapter();
   const store = new DbBacklogOrchestratorStore();
-  const archon = new CliWorkflowArchonPort(cwd);
+  const archon = new CliWorkflowArchonPort(projectCwd);
   const orchestrator = new BacklogOrchestrator(config, { github, archon, store });
-  return { config, github, store, archon, orchestrator };
+  return {
+    projectName: project.name ?? repo,
+    config,
+    github,
+    store,
+    archon,
+    orchestrator,
+  };
 }
 
 class CliWorkflowArchonPort implements ArchonPort {
@@ -244,6 +318,33 @@ async function getCurrentGitHubRepo(cwd: string): Promise<string> {
     { cwd, timeout: 30_000 }
   );
   return stdout.trim();
+}
+
+function normalizeBacklogProjects(
+  projects: (string | BacklogProjectConfig)[] | undefined
+): BacklogProjectConfig[] {
+  return (projects ?? []).map(project =>
+    typeof project === 'string' ? { repo: project } : project
+  );
+}
+
+function resolveProjectCwd(serviceCwd: string, projectCwd: string | undefined): string {
+  if (!projectCwd?.trim()) return serviceCwd;
+  const trimmed = projectCwd.trim();
+  return isAbsolute(trimmed) ? trimmed : resolve(serviceCwd, trimmed);
+}
+
+function backlogHarnessConfig(
+  config: Partial<BacklogProjectConfig & NonNullable<MergedConfig['backlog']>>
+): Partial<HarnessOrchestratorConfig> {
+  return {
+    maxParallelWorkflows: config.maxParallelWorkflows,
+    maxOpenAgentPrs: config.maxOpenAgentPrs,
+    maxNewRunsPerCycle: config.maxNewRunsPerCycle,
+    areaLockPolicy: config.areaLockPolicy,
+    workflowLabelToName: config.workflowLabelToName,
+    autoMergeEnabled: config.autoMergeEnabled,
+  };
 }
 
 function sanitizeId(value: string): string {

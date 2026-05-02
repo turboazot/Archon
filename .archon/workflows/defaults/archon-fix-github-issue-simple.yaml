@@ -166,10 +166,5 @@ nodes:
         exit 0
       fi
 
-      if [ "${ARCHON_E2E_ALLOW_MERGE:-}" != "1" ]; then
-        echo "Refusing auto-merge without ARCHON_E2E_ALLOW_MERGE=1" >&2
-        exit 1
-      fi
-
       gh pr merge "$PR_NUMBER" --squash
       echo "Merged PR #$PR_NUMBER. GitHub will close issue #$ISSUE_NUM from the PR closing keyword when auto-close is enabled."

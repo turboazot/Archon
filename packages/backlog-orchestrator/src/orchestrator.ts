@@ -123,6 +123,25 @@ export class HarnessOrchestrator {
         continue;
       }
 
+      if (this.config.workflowLabelsCompletingWithoutPr.includes(run.workflowLabel)) {
+        await this.transitionRun(run, {
+          status: 'done',
+        });
+        await this.github.removeIssueLabel(
+          this.config.repo,
+          issue.number,
+          LIFECYCLE_LABELS.inProgress
+        );
+        await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.done);
+        await this.commentOnce(
+          run,
+          issue.number,
+          'completed-without-pr',
+          `Workflow completed without a PR for ${run.branch}.`
+        );
+        continue;
+      }
+
       await this.markRunFailed(
         run,
         issue,

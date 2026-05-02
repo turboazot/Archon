@@ -62,6 +62,46 @@ describe('HarnessOrchestrator', () => {
     expect(github.getComments(1)[0]?.body).toContain('Started archon-fix-github-issue');
   });
 
+  test('starts the video recording E2E workflow from its routing label', async () => {
+    const { archon, orchestrator } = createHarness({
+      issues: [
+        makeIssue({
+          number: 1,
+          labels: ['archon:ready', 'archon-workflow:e2e-video-recording', 'area:e2e'],
+        }),
+      ],
+    });
+
+    await orchestrator.reconcileOnce();
+
+    expect(archon.getStartedRuns()[0]?.workflowName).toBe('archon-e2e-video-recording');
+  });
+
+  test('marks configured PR-less workflows done after successful completion', async () => {
+    const { archon, github, store, orchestrator } = createHarness({
+      issues: [
+        makeIssue({
+          number: 1,
+          labels: ['archon:ready', 'archon-workflow:e2e-video-recording', 'area:e2e'],
+        }),
+      ],
+    });
+
+    await orchestrator.reconcileOnce();
+    const workflowRun = archon.getStartedRuns()[0];
+    if (!workflowRun) throw new Error('Expected workflow run to start');
+    archon.completeRun(workflowRun.id, 'succeeded');
+
+    await orchestrator.reconcileOnce();
+
+    const runs = await store.listRuns(repo);
+    const issue = await github.getIssue(repo, 1);
+    expect(runs[0]?.status).toBe('done');
+    expect(issue?.labels).toContain('archon:done');
+    expect(issue?.labels).not.toContain('archon:blocked');
+    expect(github.getComments(1).some(comment => comment.body.includes('without a PR'))).toBe(true);
+  });
+
   test('scenario 2: blocks a ready issue with no workflow label', async () => {
     const { github, archon, orchestrator } = createHarness({
       issues: [makeIssue({ number: 1, labels: ['archon:ready'] })],

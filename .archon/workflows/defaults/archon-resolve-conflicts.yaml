@@ -17,3 +17,63 @@ modelReasoningEffort: medium
 nodes:
   - id: resolve
     command: archon-resolve-merge-conflicts
+
+  - id: merge-if-auto
+    depends_on: [resolve]
+    bash: |
+      set -euo pipefail
+
+      REQUEST=$(cat <<'EOF'
+      $ARGUMENTS
+      EOF
+      )
+
+      PR_NUMBER=$(printf '%s\n' "$REQUEST" | grep -oE 'PR: #[0-9]+' | head -1 | grep -oE '[0-9]+')
+      if [ -z "$PR_NUMBER" ]; then
+        PR_NUMBER=$(printf '%s\n' "$REQUEST" | grep -oE '/pull/[0-9]+' | head -1 | grep -oE '[0-9]+')
+      fi
+      if [ -z "$PR_NUMBER" ]; then
+        PR_NUMBER=$(printf '%s\n' "$REQUEST" | grep -oE 'PR #[0-9]+' | head -1 | grep -oE '[0-9]+')
+      fi
+      if [ -z "$PR_NUMBER" ]; then
+        echo "Could not determine PR number from workflow arguments; leaving PR open." >&2
+        exit 0
+      fi
+
+      ISSUE_NUM=$(printf '%s\n' "$REQUEST" | grep -oE 'Issue: #[0-9]+' | head -1 | grep -oE '[0-9]+')
+      if [ -z "$ISSUE_NUM" ]; then
+        ISSUE_NUM=$(gh pr view "$PR_NUMBER" --json body --jq '.body' |
+          grep -oE '(Fixes|Closes|Resolves)[[:space:]]+#[0-9]+' |
+          grep -oE '[0-9]+' |
+          head -1)
+      fi
+      if [ -z "$ISSUE_NUM" ]; then
+        echo "Could not determine issue number for PR #$PR_NUMBER; leaving PR open." >&2
+        exit 0
+      fi
+
+      if ! gh issue view "$ISSUE_NUM" --json labels --jq '.labels[].name' | grep -qx 'archon:auto-merge'; then
+        echo "Issue #$ISSUE_NUM is not labeled archon:auto-merge; leaving PR #$PR_NUMBER open."
+        exit 0
+      fi
+
+      PR_STATE=$(gh pr view "$PR_NUMBER" --json state,isDraft,mergeable --jq '.state + " " + (.isDraft|tostring) + " " + .mergeable')
+      STATE=$(printf '%s\n' "$PR_STATE" | awk '{print $1}')
+      IS_DRAFT=$(printf '%s\n' "$PR_STATE" | awk '{print $2}')
+      MERGEABLE=$(printf '%s\n' "$PR_STATE" | awk '{print $3}')
+
+      if [ "$STATE" != "OPEN" ]; then
+        echo "PR #$PR_NUMBER is $STATE; nothing to merge."
+        exit 0
+      fi
+      if [ "$IS_DRAFT" != "false" ]; then
+        echo "PR #$PR_NUMBER is draft; leaving open."
+        exit 0
+      fi
+      if [ "$MERGEABLE" != "MERGEABLE" ]; then
+        echo "PR #$PR_NUMBER is not mergeable after conflict resolution: $MERGEABLE" >&2
+        exit 1
+      fi
+
+      gh pr merge "$PR_NUMBER" --squash
+      echo "Merged PR #$PR_NUMBER after conflict resolution."

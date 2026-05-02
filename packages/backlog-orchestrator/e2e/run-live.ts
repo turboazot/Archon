@@ -1,6 +1,8 @@
 import { mkdir, readFile, readdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { loadConfig } from '@archon/core/config';
+import type { BacklogProjectConfig } from '@archon/core/config';
 import { GitHubGhAdapter } from '../src/adapters/github-gh';
 import { createDefaultHarnessConfig, HarnessOrchestrator } from '../src/orchestrator';
 import { LIFECYCLE_LABELS } from '../src/lifecycle';
@@ -8,18 +10,21 @@ import type { HarnessIssue, StatusReport } from '../src/types';
 import { ArchonRestAdapter } from './support/archon-rest';
 import { SqliteOrchestratorStore } from './support/sqlite-store';
 
-const DEFAULT_REPO = 'podlodka-ai-club/X15';
 const RESULTS_ROOT = join(import.meta.dir, 'results');
+const DEFAULT_ENV_FILE = resolveDefaultEnvFile();
 const E2E_LABEL = 'archon-e2e';
 const TINY_ROUTING_LABEL = 'archon-workflow:e2e-tiny';
 const SELF_MERGE_ROUTING_LABEL = 'archon-workflow:e2e-tiny-self-merge';
 const SIMPLE_FIX_ROUTING_LABEL = 'archon-workflow:fix-issue-simple';
+const VIDEO_RECORDING_ROUTING_LABEL = 'archon-workflow:e2e-video-recording';
 const ISSUE_SIZES = ['tiny', 'small'] as const;
 const SCENARIOS = [
   'single',
+  'single-auto-merge',
   'blocked-parallel',
   'ecommerce-app',
   'ecommerce-app-auto-merge',
+  'video-recording',
 ] as const;
 
 type IssueSize = (typeof ISSUE_SIZES)[number];
@@ -27,7 +32,8 @@ type LiveScenario = (typeof SCENARIOS)[number];
 
 interface LiveArgs {
   cycles: number;
-  repo: string;
+  repo?: string;
+  project?: string;
   delayMs: number;
   sessionId: string;
   issueSize: IssueSize;
@@ -38,17 +44,26 @@ interface LiveArgs {
   scenario: LiveScenario;
 }
 
+interface LiveTarget {
+  name: string;
+  repo: string;
+  cwd?: string;
+  codebaseUrl: string;
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(Bun.argv.slice(2));
   await loadEnvFile(args.envFile);
+  const target = await resolveLiveTarget(args);
   const env = validateEnv();
   const resultDir = join(RESULTS_ROOT, args.sessionId);
   await mkdir(resultDir, { recursive: true });
 
-  const github = new GitHubGhAdapter({ allowMerge: env.allowMerge });
+  const github = new GitHubGhAdapter();
   const archon = new ArchonRestAdapter({
     baseUrl: env.archonBaseUrl,
-    codebaseUrl: env.archonCodebaseUrl,
+    codebaseUrl: target.codebaseUrl,
+    codebaseCwd: target.cwd,
     token: env.archonApiToken,
     sessionId: args.sessionId,
     branchName: args.branchName,
@@ -57,10 +72,11 @@ async function main(): Promise<void> {
 
   try {
     await archon.checkHealth();
-    await github.listIssues(args.repo);
+    await github.listIssues(target.repo);
     if (args.preflightOnly) {
       console.log('Live E2E preflight passed');
-      console.log(`Repo: ${args.repo}`);
+      console.log(`Project: ${target.name}`);
+      console.log(`Repo: ${target.repo}`);
       console.log(`Archon: ${env.archonBaseUrl}`);
       console.log(`Branch: ${args.branchName ?? 'per issue'}`);
       console.log(`Issue size: ${args.issueSize}`);
@@ -69,15 +85,15 @@ async function main(): Promise<void> {
       return;
     }
 
-    await ensureHarnessLabels(github, args.repo);
+    await ensureHarnessLabels(github, target.repo);
     const issues = args.resumeExisting
-      ? await loadExistingScenarioIssues({ github, args, resultDir })
-      : await createScenarioIssues(github, args);
+      ? await loadExistingScenarioIssues({ github, args, target, resultDir })
+      : await createScenarioIssues(github, args, target);
 
     const orchestrator = new HarnessOrchestrator(
       createDefaultHarnessConfig({
-        repo: args.repo,
-        autoMergeEnabled: env.allowMerge,
+        repo: target.repo,
+        autoMergeEnabled: false,
         maxParallelWorkflows: parallelScenarioLimit(args.scenario),
         maxOpenAgentPrs: parallelScenarioLimit(args.scenario),
         maxNewRunsPerCycle: maxNewRunsPerCycle(args.scenario),
@@ -95,12 +111,12 @@ async function main(): Promise<void> {
         resultDir,
         cycle,
         report,
-        repo: args.repo,
+        repo: target.repo,
         issueNumbers: issues.map(issue => issue.number),
         github,
         store,
       });
-      if (await isScenarioComplete({ args, github, store, issues })) {
+      if (await isScenarioComplete({ args, github, store, issues, target })) {
         completedEarly = true;
         console.log(`Scenario ${args.scenario} reached completion condition at cycle ${cycle}`);
         break;
@@ -109,9 +125,9 @@ async function main(): Promise<void> {
     }
 
     const finalState = {
-      issues: await github.listIssues(args.repo),
-      pullRequests: await github.listPullRequests(args.repo),
-      runs: await store.listRuns(args.repo),
+      issues: await github.listIssues(target.repo),
+      pullRequests: await github.listPullRequests(target.repo),
+      runs: await store.listRuns(target.repo),
     };
 
     await writeFile(
@@ -119,7 +135,9 @@ async function main(): Promise<void> {
       JSON.stringify(
         {
           sessionId: args.sessionId,
-          repo: args.repo,
+          project: target.name,
+          repo: target.repo,
+          codebaseCwd: target.cwd ?? null,
           scenario: args.scenario,
           issueSize: args.issueSize,
           branchName: args.branchName ?? null,
@@ -128,10 +146,9 @@ async function main(): Promise<void> {
           completedEarly,
           finalState,
           safety: {
-            liveGate: 'ARCHON_E2E_LIVE=1',
+            liveGate: 'smoke:live command',
             markerLabel: E2E_LABEL,
             branchName: args.branchName ?? null,
-            allowMerge: env.allowMerge,
           },
         },
         null,
@@ -142,6 +159,11 @@ async function main(): Promise<void> {
     console.log(`Live E2E session ${args.sessionId} finished`);
     console.log(`Issues: ${issues.map(issue => `#${String(issue.number)}`).join(', ')}`);
     console.log(`Artifacts: ${resultDir}`);
+    if (!completedEarly) {
+      throw new Error(
+        `Scenario ${args.scenario} did not reach completion within ${String(args.cycles)} cycles`
+      );
+    }
   } finally {
     store.close();
   }
@@ -154,6 +176,7 @@ async function ensureHarnessLabels(github: GitHubGhAdapter, repo: string): Promi
     TINY_ROUTING_LABEL,
     SELF_MERGE_ROUTING_LABEL,
     SIMPLE_FIX_ROUTING_LABEL,
+    VIDEO_RECORDING_ROUTING_LABEL,
     'area:e2e',
   ];
   for (const label of labels) {
@@ -190,11 +213,12 @@ async function writeCycleArtifact(input: {
 
 function parseArgs(argv: string[]): LiveArgs {
   let cycles: number | undefined;
-  let repo = DEFAULT_REPO;
+  let repo: string | undefined;
+  let project: string | undefined;
   let delayMs = 10_000;
   let sessionId = new Date().toISOString().replace(/[:.]/g, '-');
   let issueSize: IssueSize = 'tiny';
-  let envFile = join(process.cwd(), '.env');
+  let envFile = DEFAULT_ENV_FILE;
   let preflightOnly = false;
   let resumeExisting = false;
   let scenario: LiveScenario = 'single';
@@ -207,6 +231,9 @@ function parseArgs(argv: string[]): LiveArgs {
       index += 1;
     } else if (arg === '--repo' && next) {
       repo = next;
+      index += 1;
+    } else if (arg === '--project' && next) {
+      project = next;
       index += 1;
     } else if (arg === '--delay-ms' && next) {
       delayMs = Number(next);
@@ -238,24 +265,28 @@ function parseArgs(argv: string[]): LiveArgs {
     }
   }
 
-  const resolvedCycles = cycles ?? (isEcommerceScenario(scenario) ? 120 : 3);
+  const resolvedCycles = cycles ?? (isLongRunningLiveScenario(scenario) ? 120 : 3);
   if (!Number.isInteger(resolvedCycles) || resolvedCycles < 1 || resolvedCycles > 240) {
     throw new Error('--cycles must be an integer from 1 to 240');
   }
   if (!Number.isInteger(delayMs) || delayMs < 0) {
     throw new Error('--delay-ms must be a non-negative integer');
   }
-  if (!repo.includes('/')) throw new Error('--repo must be owner/name');
+  if (repo && !repo.includes('/')) throw new Error('--repo must be owner/name');
   if (resumeExisting && !argv.includes('--session')) {
     throw new Error('--resume-existing requires --session <existing-session-id>');
   }
   return {
     cycles: resolvedCycles,
     repo,
+    project,
     delayMs,
     sessionId,
     issueSize,
-    branchName: scenario === 'single' ? `archon-e2e/${sessionId}` : undefined,
+    branchName:
+      scenario === 'single' || scenario === 'single-auto-merge' || scenario === 'video-recording'
+        ? `archon-e2e/${sessionId}`
+        : undefined,
     envFile,
     preflightOnly,
     resumeExisting,
@@ -305,12 +336,13 @@ function stripInlineComment(value: string): string {
 
 async function createScenarioIssues(
   github: GitHubGhAdapter,
-  args: LiveArgs
+  args: LiveArgs,
+  target: LiveTarget
 ): Promise<HarnessIssue[]> {
   if (args.scenario === 'single') {
     const issueContent = buildIssueContent(args);
     const issue = await github.createIssue({
-      repo: args.repo,
+      repo: target.repo,
       title: issueContent.title,
       body: issueContent.body,
       labels: [E2E_LABEL, LIFECYCLE_LABELS.ready, TINY_ROUTING_LABEL, 'area:e2e'],
@@ -318,14 +350,43 @@ async function createScenarioIssues(
     return [issue];
   }
 
+  if (args.scenario === 'single-auto-merge') {
+    const issue = await github.createIssue({
+      repo: target.repo,
+      title: `[archon-e2e:${args.sessionId}] Single auto-merge smoke issue`,
+      body: buildSelfMergeIssueBody({
+        args,
+        role: 'single-auto-merge',
+      }),
+      labels: [
+        E2E_LABEL,
+        LIFECYCLE_LABELS.ready,
+        SELF_MERGE_ROUTING_LABEL,
+        LIFECYCLE_LABELS.autoMerge,
+        'area:e2e',
+      ],
+    });
+    return [issue];
+  }
+
+  if (args.scenario === 'video-recording') {
+    const issue = await github.createIssue({
+      repo: target.repo,
+      title: `[archon-e2e:${args.sessionId}] UI video recording smoke issue`,
+      body: buildVideoRecordingIssueBody(args),
+      labels: [E2E_LABEL, LIFECYCLE_LABELS.ready, VIDEO_RECORDING_ROUTING_LABEL, 'area:e2e'],
+    });
+    return [issue];
+  }
+
   if (isEcommerceScenario(args.scenario)) {
-    return createEcommerceAppIssues(github, args, {
+    return createEcommerceAppIssues(github, args, target, {
       autoMergeAll: args.scenario === 'ecommerce-app-auto-merge',
     });
   }
 
   const skeleton = await github.createIssue({
-    repo: args.repo,
+    repo: target.repo,
     title: `[archon-e2e:${args.sessionId}] Skeleton smoke issue`,
     body: buildSelfMergeIssueBody({
       args,
@@ -341,7 +402,7 @@ async function createScenarioIssues(
   });
 
   const firstBlocked = await github.createIssue({
-    repo: args.repo,
+    repo: target.repo,
     title: `[archon-e2e:${args.sessionId}] Blocked parallel smoke A`,
     body: buildSelfMergeIssueBody({
       args,
@@ -357,7 +418,7 @@ async function createScenarioIssues(
   });
 
   const secondBlocked = await github.createIssue({
-    repo: args.repo,
+    repo: target.repo,
     title: `[archon-e2e:${args.sessionId}] Blocked parallel smoke B`,
     body: buildSelfMergeIssueBody({
       args,
@@ -372,11 +433,11 @@ async function createScenarioIssues(
     ],
   });
 
-  await github.addIssueBlockedBy(args.repo, firstBlocked.number, skeleton.number);
-  await github.addIssueBlockedBy(args.repo, secondBlocked.number, skeleton.number);
+  await github.addIssueBlockedBy(target.repo, firstBlocked.number, skeleton.number);
+  await github.addIssueBlockedBy(target.repo, secondBlocked.number, skeleton.number);
 
-  const hydratedFirstBlocked = await github.getIssue(args.repo, firstBlocked.number);
-  const hydratedSecondBlocked = await github.getIssue(args.repo, secondBlocked.number);
+  const hydratedFirstBlocked = await github.getIssue(target.repo, firstBlocked.number);
+  const hydratedSecondBlocked = await github.getIssue(target.repo, secondBlocked.number);
 
   return [skeleton, hydratedFirstBlocked ?? firstBlocked, hydratedSecondBlocked ?? secondBlocked];
 }
@@ -384,6 +445,7 @@ async function createScenarioIssues(
 async function loadExistingScenarioIssues(input: {
   github: GitHubGhAdapter;
   args: LiveArgs;
+  target: LiveTarget;
   resultDir: string;
 }): Promise<HarnessIssue[]> {
   const cycleFiles = (await readdir(input.resultDir))
@@ -405,7 +467,7 @@ async function loadExistingScenarioIssues(input: {
   }
 
   const issues = await Promise.all(
-    issueNumbers.map(issueNumber => input.github.getIssue(input.args.repo, issueNumber))
+    issueNumbers.map(issueNumber => input.github.getIssue(input.target.repo, issueNumber))
   );
   const missing = issueNumbers.filter((_, index) => !issues[index]);
   if (missing.length > 0) {
@@ -418,6 +480,7 @@ async function loadExistingScenarioIssues(input: {
 async function createEcommerceAppIssues(
   github: GitHubGhAdapter,
   args: LiveArgs,
+  target: LiveTarget,
   options: { autoMergeAll: boolean }
 ): Promise<HarnessIssue[]> {
   const issueLabels = (autoMerge: boolean): string[] => [
@@ -432,7 +495,7 @@ async function createEcommerceAppIssues(
     : 'Open a PR but do not auto-merge this issue.';
 
   const skeleton = await github.createIssue({
-    repo: args.repo,
+    repo: target.repo,
     title: `[archon-e2e:${args.sessionId}] Ecommerce app skeleton`,
     body: buildEcommerceAppIssueBody({
       args,
@@ -449,7 +512,7 @@ async function createEcommerceAppIssues(
   });
 
   const catalog = await github.createIssue({
-    repo: args.repo,
+    repo: target.repo,
     title: `[archon-e2e:${args.sessionId}] Ecommerce catalog interactions`,
     body: buildEcommerceAppIssueBody({
       args,
@@ -467,7 +530,7 @@ async function createEcommerceAppIssues(
   });
 
   const cartCheckout = await github.createIssue({
-    repo: args.repo,
+    repo: target.repo,
     title: `[archon-e2e:${args.sessionId}] Ecommerce cart and checkout`,
     body: buildEcommerceAppIssueBody({
       args,
@@ -485,11 +548,11 @@ async function createEcommerceAppIssues(
     labels: issueLabels(options.autoMergeAll),
   });
 
-  await github.addIssueBlockedBy(args.repo, catalog.number, skeleton.number);
-  await github.addIssueBlockedBy(args.repo, cartCheckout.number, skeleton.number);
+  await github.addIssueBlockedBy(target.repo, catalog.number, skeleton.number);
+  await github.addIssueBlockedBy(target.repo, cartCheckout.number, skeleton.number);
 
-  const hydratedCatalog = await github.getIssue(args.repo, catalog.number);
-  const hydratedCartCheckout = await github.getIssue(args.repo, cartCheckout.number);
+  const hydratedCatalog = await github.getIssue(target.repo, catalog.number);
+  const hydratedCartCheckout = await github.getIssue(target.repo, cartCheckout.number);
 
   return [skeleton, hydratedCatalog ?? catalog, hydratedCartCheckout ?? cartCheckout];
 }
@@ -539,7 +602,7 @@ function buildIssueContent(args: LiveArgs): { title: string; body: string } {
 function buildSelfMergeIssueBody(input: { args: LiveArgs; role: string }): string {
   const artifactPath = `archon-e2e/${input.args.sessionId}-ISSUE_NUMBER.md`;
   return [
-    'This disposable issue was created by the Archon harness blocked-parallel live E2E runner.',
+    'This disposable issue was created by the Archon harness self-merge live E2E runner.',
     '',
     `Session: ${input.args.sessionId}`,
     `Role: ${input.role}`,
@@ -554,6 +617,33 @@ function buildSelfMergeIssueBody(input: { args: LiveArgs; role: string }): strin
   ]
     .filter((line): line is string => line !== undefined)
     .join('\n');
+}
+
+function buildVideoRecordingIssueBody(args: LiveArgs): string {
+  return [
+    'This disposable issue was created by the Archon harness UI video recording live E2E runner.',
+    '',
+    `Session: ${args.sessionId}`,
+    `Expected artifact branch: ${args.branchName}`,
+    '',
+    'Goal: run a small happy-path UI E2E test against the target application and record it to prove the application is workable.',
+    '',
+    'UI test description:',
+    '- Inspect the repository and identify the simplest runnable user-facing UI.',
+    '- Start the application locally using the repo conventions.',
+    '- Exercise one short happy path that a real user would recognize as the app working.',
+    '- Prefer a path that reaches a meaningful loaded/interactive state rather than only checking that the page renders.',
+    '- Record the browser session while performing the flow and produce a final MP4 artifact.',
+    '- Add brief pauses after the page loads, after meaningful interactions, and on the final success state so the recording is easy to follow.',
+    '- Verify at least one visible outcome that proves the happy path succeeded.',
+    '',
+    'Acceptance criteria:',
+    '- Record the UI test with Playwright video recording, convert it to MP4, and save the MP4 as a scoped archon-e2e artifact.',
+    '- Include a concise summary of the app path tested, commands used, assertion made, and recording location.',
+    '- Push the scoped recording artifact branch without opening a PR.',
+    '- Comment on this initial issue with the GitHub-hosted raw MP4 link.',
+    '- Do not modify source code, package files, lockfiles, CI, or existing documentation.',
+  ].join('\n');
 }
 
 function buildEcommerceAppIssueBody(input: {
@@ -585,10 +675,13 @@ async function isScenarioComplete(input: {
   github: GitHubGhAdapter;
   store: SqliteOrchestratorStore;
   issues: HarnessIssue[];
+  target?: LiveTarget;
 }): Promise<boolean> {
-  const runs = await input.store.listRuns(input.args.repo);
+  const repo = input.target?.repo ?? input.args.repo;
+  if (!repo) throw new Error('Missing live target repo');
+  const runs = await input.store.listRuns(repo);
   const issues = await Promise.all(
-    input.issues.map(issue => input.github.getIssue(input.args.repo, issue.number))
+    input.issues.map(issue => input.github.getIssue(repo, issue.number))
   );
 
   if (input.args.scenario === 'ecommerce-app') {
@@ -624,10 +717,23 @@ async function isScenarioComplete(input: {
     );
   }
 
+  if (input.args.scenario === 'single-auto-merge') {
+    const [issue] = issues;
+    if (!issue) return false;
+    return (
+      issue.state === 'closed' &&
+      runs.some(run => run.issueNumber === issue.number && run.status === 'done')
+    );
+  }
+
   if (input.args.scenario === 'single') {
     return runs.some(
       run => run.status === 'pr_open' || run.status === 'ready_for_review' || run.status === 'done'
     );
+  }
+
+  if (input.args.scenario === 'video-recording') {
+    return runs.some(run => run.status === 'done');
   }
 
   return false;
@@ -653,34 +759,100 @@ function isScenario(value: string): value is LiveScenario {
   return SCENARIOS.includes(value as LiveScenario);
 }
 
+function resolveDefaultEnvFile(): string {
+  const candidates = [join(process.cwd(), '.env'), join(import.meta.dir, '..', '..', '..', '.env')];
+  return candidates.find(candidate => existsSync(candidate)) ?? candidates[0];
+}
+
+function resolveConfigRoot(): string {
+  const candidates = [process.cwd(), join(import.meta.dir, '..', '..', '..')];
+  return (
+    candidates.find(candidate => existsSync(join(candidate, '.archon', 'config.yaml'))) ??
+    process.cwd()
+  );
+}
+
 function isEcommerceScenario(scenario: LiveScenario): boolean {
   return scenario === 'ecommerce-app' || scenario === 'ecommerce-app-auto-merge';
 }
 
-function validateEnv(): {
-  archonBaseUrl: string;
-  archonCodebaseUrl: string;
-  archonApiToken?: string;
-  allowMerge: boolean;
-} {
-  if (process.env.ARCHON_E2E_LIVE !== '1') {
-    throw new Error('Refusing live run without ARCHON_E2E_LIVE=1');
-  }
-  const archonBaseUrl = requireEnv('ARCHON_BASE_URL');
-  const archonCodebaseUrl =
-    process.env.ARCHON_CODEBASE_URL ?? 'git@github.com:podlodka-ai-club/X15.git';
-  return {
-    archonBaseUrl,
-    archonCodebaseUrl,
-    archonApiToken: process.env.ARCHON_API_TOKEN,
-    allowMerge: process.env.ARCHON_E2E_ALLOW_MERGE === '1',
-  };
+function isLongRunningLiveScenario(scenario: LiveScenario): boolean {
+  return (
+    scenario === 'single-auto-merge' ||
+    scenario === 'video-recording' ||
+    isEcommerceScenario(scenario)
+  );
 }
 
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`Missing required env var ${name}`);
-  return value;
+async function resolveLiveTarget(args: LiveArgs): Promise<LiveTarget> {
+  const config = await loadConfig(resolveConfigRoot());
+  const projects = normalizeBacklogProjects(config.backlog?.projects);
+  const selected = selectConfiguredProject(projects, args);
+
+  if (selected) {
+    return {
+      name: selected.name ?? selected.repo,
+      repo: selected.repo,
+      cwd: selected.cwd,
+      codebaseUrl: repoToSshUrl(selected.repo),
+    };
+  }
+
+  if (args.repo) {
+    return {
+      name: args.repo,
+      repo: args.repo,
+      codebaseUrl: repoToSshUrl(args.repo),
+    };
+  }
+
+  throw new Error(
+    'No live E2E project selected. Configure backlog.projects in .archon/config.yaml or pass --project <name> / --repo <owner/name>.'
+  );
+}
+
+function normalizeBacklogProjects(
+  projects: (string | BacklogProjectConfig)[] | undefined
+): BacklogProjectConfig[] {
+  return (projects ?? []).map(project =>
+    typeof project === 'string' ? { repo: project } : project
+  );
+}
+
+function selectConfiguredProject(
+  projects: BacklogProjectConfig[],
+  args: LiveArgs
+): BacklogProjectConfig | undefined {
+  if (args.repo) return projects.find(project => project.repo === args.repo);
+
+  if (args.project) {
+    const selected = projects.find(
+      project => project.name === args.project || project.repo === args.project
+    );
+    if (!selected) {
+      throw new Error(`No backlog.projects entry matched --project ${args.project}`);
+    }
+    return selected;
+  }
+
+  const x15 = projects.find(project => project.name?.toLowerCase() === 'x15');
+  if (x15) return x15;
+  if (projects.length === 1) return projects[0];
+  return undefined;
+}
+
+function repoToSshUrl(repo: string): string {
+  return `git@github.com:${repo}.git`;
+}
+
+function validateEnv(): {
+  archonBaseUrl: string;
+  archonApiToken?: string;
+} {
+  return {
+    archonBaseUrl: process.env.ARCHON_BASE_URL ?? 'http://localhost:3090',
+    archonApiToken: process.env.ARCHON_API_TOKEN,
+  };
 }
 
 function sleep(ms: number): Promise<void> {

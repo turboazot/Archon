@@ -130,6 +130,7 @@ export interface HarnessOrchestratorConfig {
   conflictWorkflowName: string;
   areaLockPolicy: AreaLockPolicy;
   workflowLabelToName: Record<string, string>;
+  workflowLabelsCompletingWithoutPr: string[];
   now: () => Date;
 }
 

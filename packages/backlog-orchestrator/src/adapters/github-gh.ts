@@ -12,10 +12,6 @@ import { extractClosingIssueReferences, findSingleClosingIssueNumber } from '../
 
 const execFileAsync = promisify(execFile);
 
-interface GitHubGhOptions {
-  allowMerge?: boolean;
-}
-
 interface GhLabel {
   name: string;
 }
@@ -54,12 +50,6 @@ interface GhRepositoryRest {
 }
 
 export class GitHubGhAdapter implements GitHubPort {
-  private readonly allowMerge: boolean;
-
-  constructor(options: GitHubGhOptions = {}) {
-    this.allowMerge = options.allowMerge ?? false;
-  }
-
   async getRepositoryInfo(
     repo: string
   ): Promise<{ defaultBranch: string; autoCloseIssuesEnabled?: boolean }> {
@@ -162,9 +152,6 @@ export class GitHubGhAdapter implements GitHubPort {
   }
 
   async mergePullRequest(repo: string, prNumber: number): Promise<void> {
-    if (!this.allowMerge) {
-      throw new Error('Live GitHub merge is disabled. Set ARCHON_E2E_ALLOW_MERGE=1 to allow it.');
-    }
     await gh(['pr', 'merge', String(prNumber), '--repo', repo, '--squash']);
   }
 
@@ -353,7 +340,7 @@ function mapPullRequestState(state: string): HarnessPullRequest['state'] {
 }
 
 function mapCheckState(rollup: GhPullRequest['statusCheckRollup']): CheckState {
-  if (rollup.length === 0) return 'pending';
+  if (rollup.length === 0) return 'passing';
   if (
     rollup.some(check =>
       ['FAILURE', 'ERROR', 'TIMED_OUT', 'ACTION_REQUIRED', 'CANCELLED'].includes(

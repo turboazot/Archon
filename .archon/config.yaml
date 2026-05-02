@@ -1,5 +1,15 @@
-worktree:
-  baseBranch: dev
-
 docs:
   path: packages/docs-web/src/content/docs
+
+backlog:
+  projects:
+    - name: Archon
+      repo: turboazot/Archon
+      cwd: /home/ubuntu/projects/misc/Archon
+      baseBranch: dev
+    - name: X15
+      repo: podlodka-ai-club/X15
+      cwd: /home/ubuntu/.archon/workspaces/podlodka-ai-club/X15/source
+    - name: Harness
+      repo: turboazot/harness
+      cwd: /home/ubuntu/projects/misc/harness

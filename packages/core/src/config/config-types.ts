@@ -224,6 +224,7 @@ export interface RepoConfig {
    */
   backlog?: {
     repo?: string;
+    projects?: (string | BacklogProjectConfig)[];
     maxParallelWorkflows?: number;
     maxOpenAgentPrs?: number;
     maxNewRunsPerCycle?: number;
@@ -258,6 +259,19 @@ export interface RepoConfig {
      */
     loadDefaultWorkflows?: boolean;
   };
+}
+
+export interface BacklogProjectConfig {
+  name?: string;
+  repo: string;
+  cwd?: string;
+  baseBranch?: string;
+  maxParallelWorkflows?: number;
+  maxOpenAgentPrs?: number;
+  maxNewRunsPerCycle?: number;
+  areaLockPolicy?: 'none' | 'conservative';
+  workflowLabelToName?: Record<string, string>;
+  autoMergeEnabled?: boolean;
 }
 
 /**
@@ -314,6 +328,7 @@ export interface MergedConfig {
 
   backlog?: {
     repo?: string;
+    projects?: (string | BacklogProjectConfig)[];
     maxParallelWorkflows?: number;
     maxOpenAgentPrs?: number;
     maxNewRunsPerCycle?: number;

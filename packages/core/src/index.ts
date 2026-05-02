@@ -84,6 +84,7 @@ export { cloneRepository, registerRepository, type RegisterResult } from './hand
 export {
   type GlobalConfig,
   type RepoConfig,
+  type BacklogProjectConfig,
   type MergedConfig,
   type SafeConfig,
 } from './config/config-types';

@@ -14,6 +14,7 @@
     "test:unit": "bun test src/orchestrator.test.ts src/pr-linking.test.ts",
     "test:e2e": "bun e2e/run-fixture.ts ready-success && bun e2e/run-fixture.ts pr-validation-fails-then-fix",
     "smoke:live": "bun e2e/run-live.ts",
+    "smoke:create-ecommerce-issues": "bash e2e/create-ecommerce-issues.sh",
     "type-check": "bun x tsc --noEmit",
     "build": "echo 'No build needed - Bun runs TypeScript directly'"
   },

@@ -16,6 +16,7 @@ Archon can run locally for development or be deployed to a server for always-on 
 | Method | Best For | Guide |
 |--------|----------|-------|
 | **Local** | Development, personal use | [Local Development](/deployment/local/) |
+| **Binary + systemd** | Always-on binary service without Docker | [Binary systemd and ngrok webhooks](/deployment/binary-systemd-webhook/) |
 | **Docker** | Self-hosted servers, CI environments | [Docker](/deployment/docker/) |
 | **Cloud VPS** | 24/7 operation with automatic HTTPS | [Cloud Deployment](/deployment/cloud/) |
 | **Windows** | Native Windows or WSL2 | [Windows](/deployment/windows/) |

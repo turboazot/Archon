@@ -24,7 +24,9 @@ export function createDefaultHarnessConfig(
       'archon-workflow:refactor': 'archon-refactor-safely',
       'archon-workflow:e2e-tiny': 'archon-e2e-tiny',
       'archon-workflow:e2e-tiny-self-merge': 'archon-e2e-tiny-self-merge',
+      'archon-workflow:e2e-video-recording': 'archon-e2e-video-recording',
     },
+    workflowLabelsCompletingWithoutPr: ['archon-workflow:e2e-video-recording'],
     now: () => new Date(),
     ...overrides,
   };
