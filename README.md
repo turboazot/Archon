@@ -8,6 +8,19 @@ and mark work done only when the repository agrees.
 The original product-facing README is preserved in [ARCHON.md](./ARCHON.md).
 This file focuses on the harness and backlog orchestrator.
 
+## Agent Reading Order
+
+For repo analysis:
+
+1. `CLAUDE.md` — engineering rules.
+2. `README.md` — current harness/backlog framing.
+3. `ARCHON.md` — product/workflow-engine context, especially workflow customization.
+4. `packages/backlog-orchestrator/README.md` — package-specific behavior.
+
+Keep the boundary clear: backlog-orchestrator schedules and reconciles the
+GitHub issue/PR lifecycle; implementation, validation, review, approval, and PR
+creation behavior is defined by customizable Archon YAML workflows.
+
 ## The Harness
 
 The important demo is not "an agent wrote code." The important demo is that the

@@ -1,1 +1,5 @@
-- read CLAUDE.md once to understand context
+- read CLAUDE.md once to understand engineering rules
+- read README.md once to understand the current harness/backlog-orchestrator framing
+- read ARCHON.md sections "Why Archon?", "What It Looks Like", and "What Can You Automate?" when analyzing workflows or orchestration
+- when working on packages/backlog-orchestrator, also read packages/backlog-orchestrator/README.md
+- remember: backlog-orchestrator schedules and reconciles the GitHub issue/PR lifecycle; implementation, validation, review, approval, and PR creation behavior is defined by customizable Archon YAML workflows
