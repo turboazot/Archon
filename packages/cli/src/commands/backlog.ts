@@ -366,21 +366,35 @@ async function runProjectStep(
   }
 }
 
-function backlogHarnessConfig(
+export function backlogHarnessConfig(
   config: Partial<BacklogProjectConfig & NonNullable<MergedConfig['backlog']>>
 ): Partial<HarnessOrchestratorConfig> {
-  return {
-    maxParallelWorkflows: config.maxParallelWorkflows,
-    maxOpenAgentPrs: config.maxOpenAgentPrs,
-    maxNewRunsPerCycle: config.maxNewRunsPerCycle,
-    maxRunAttempts: config.maxRunAttempts,
-    maxFixAttempts: config.maxFixAttempts,
-    conflictWorkflowName: config.conflictWorkflowName,
-    areaLockPolicy: config.areaLockPolicy,
-    workflowLabelToName: config.workflowLabelToName,
-    workflowLabelsCompletingWithoutPr: config.workflowLabelsCompletingWithoutPr,
-    autoMergeEnabled: config.autoMergeEnabled,
-  };
+  const result: Partial<HarnessOrchestratorConfig> = {};
+
+  setIfDefined(result, 'maxParallelWorkflows', config.maxParallelWorkflows);
+  setIfDefined(result, 'maxOpenAgentPrs', config.maxOpenAgentPrs);
+  setIfDefined(result, 'maxNewRunsPerCycle', config.maxNewRunsPerCycle);
+  setIfDefined(result, 'maxRunAttempts', config.maxRunAttempts);
+  setIfDefined(result, 'maxFixAttempts', config.maxFixAttempts);
+  setIfDefined(result, 'conflictWorkflowName', config.conflictWorkflowName);
+  setIfDefined(result, 'areaLockPolicy', config.areaLockPolicy);
+  setIfDefined(result, 'workflowLabelToName', config.workflowLabelToName);
+  setIfDefined(
+    result,
+    'workflowLabelsCompletingWithoutPr',
+    config.workflowLabelsCompletingWithoutPr
+  );
+  setIfDefined(result, 'autoMergeEnabled', config.autoMergeEnabled);
+
+  return result;
+}
+
+function setIfDefined<K extends keyof HarnessOrchestratorConfig>(
+  target: Partial<HarnessOrchestratorConfig>,
+  key: K,
+  value: HarnessOrchestratorConfig[K] | undefined
+): void {
+  if (value !== undefined) target[key] = value;
 }
 
 function sanitizeId(value: string): string {

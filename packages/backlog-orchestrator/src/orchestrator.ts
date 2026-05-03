@@ -450,6 +450,11 @@ export class HarnessOrchestrator {
     pr: HarnessPullRequest,
     lastError: string
   ): Promise<void> {
+    const conflictWorkflowName = this.config.conflictWorkflowName;
+    if (typeof conflictWorkflowName !== 'string' || !conflictWorkflowName.trim()) {
+      throw new Error('Backlog conflict workflow is not configured');
+    }
+
     if (run.fixAttempts >= this.config.maxFixAttempts) {
       await this.transitionRun(run, {
         status: 'needs_fix',
@@ -467,7 +472,7 @@ export class HarnessOrchestrator {
     const conflictWorkflow = await this.archon.startWorkflow({
       repo: this.config.repo,
       issue,
-      workflowName: this.config.conflictWorkflowName,
+      workflowName: conflictWorkflowName,
       branch: run.branch,
       prNumber: pr.number,
       mode: 'conflict',
