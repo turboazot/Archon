@@ -1,5 +1,9 @@
 export { BacklogOrchestrator, HarnessOrchestrator } from './orchestrator';
-export { createDefaultHarnessConfig } from './config';
+export {
+  DEMO_WORKFLOW_LABELS_COMPLETING_WITHOUT_PR,
+  DEMO_WORKFLOW_LABEL_TO_NAME,
+  createDefaultHarnessConfig,
+} from './config';
 export { LIFECYCLE_LABELS, WORKFLOW_LABEL_PREFIX } from './lifecycle';
 export { DbBacklogOrchestratorStore } from './db/store';
 export {

@@ -119,7 +119,7 @@ when all of these are true:
 - the PR targets the repository default branch
 - GitHub auto-close semantics are available
 - the PR is open, non-draft, mergeable, and not in a fix workflow
-- required checks are passing
+- required checks are present and passing
 - no review has requested changes
 
 Everything else stops at `archon:ready-for-review` for a human.
@@ -155,11 +155,13 @@ backlog:
       maxParallelWorkflows: 2
       maxOpenAgentPrs: 3
       maxNewRunsPerCycle: 1
+      maxRunAttempts: 2
+      maxFixAttempts: 2
       autoMergeEnabled: true
       areaLockPolicy: conservative
+      conflictWorkflowName: archon-resolve-conflicts
       workflowLabelToName:
         archon-workflow:fix-issue-simple: archon-fix-github-issue-simple
-        archon-workflow:video-recording: archon-video-recording
 ```
 
 ## Workflow Engine Underneath
@@ -308,7 +310,7 @@ Live smoke uses a configured project and a running Archon server:
 
 ```bash
 ARCHON_BASE_URL=http://localhost:3090 \
-bun --filter @archon/backlog-orchestrator smoke:live -- --project X15 --preflight
+bun --filter @archon/backlog-orchestrator smoke:live -- --repo owner/name --preflight
 ```
 
 The full ecommerce smoke seeds a dependency graph of disposable GitHub issues,

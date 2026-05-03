@@ -4,7 +4,12 @@ import { join } from 'path';
 import { loadConfig } from '@archon/core/config';
 import type { BacklogProjectConfig } from '@archon/core/config';
 import { GitHubGhAdapter } from '../src/adapters/github-gh';
-import { createDefaultHarnessConfig, HarnessOrchestrator } from '../src/orchestrator';
+import {
+  DEMO_WORKFLOW_LABELS_COMPLETING_WITHOUT_PR,
+  DEMO_WORKFLOW_LABEL_TO_NAME,
+  createDefaultHarnessConfig,
+  HarnessOrchestrator,
+} from '../src/orchestrator';
 import { LIFECYCLE_LABELS } from '../src/lifecycle';
 import type { HarnessIssue, StatusReport } from '../src/types';
 import { ArchonRestAdapter } from './support/archon-rest';
@@ -98,6 +103,11 @@ async function main(): Promise<void> {
         maxOpenAgentPrs: parallelScenarioLimit(args.scenario),
         maxNewRunsPerCycle: maxNewRunsPerCycle(args.scenario),
         areaLockPolicy: args.scenario === 'single' ? 'conservative' : 'none',
+        workflowLabelToName: {
+          ...createDefaultHarnessConfig().workflowLabelToName,
+          ...DEMO_WORKFLOW_LABEL_TO_NAME,
+        },
+        workflowLabelsCompletingWithoutPr: [...DEMO_WORKFLOW_LABELS_COMPLETING_WITHOUT_PR],
       }),
       { github, archon, store }
     );
@@ -835,8 +845,6 @@ function selectConfiguredProject(
     return selected;
   }
 
-  const x15 = projects.find(project => project.name?.toLowerCase() === 'x15');
-  if (x15) return x15;
   if (projects.length === 1) return projects[0];
   return undefined;
 }

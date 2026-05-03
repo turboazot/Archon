@@ -10,8 +10,8 @@
     "./mocks": "./src/mocks.ts"
   },
   "scripts": {
-    "test": "bun test src/orchestrator.test.ts src/pr-linking.test.ts && bun e2e/run-fixture.ts ready-success && bun e2e/run-fixture.ts pr-validation-fails-then-fix",
-    "test:unit": "bun test src/orchestrator.test.ts src/pr-linking.test.ts",
+    "test": "bun test src/orchestrator.test.ts src/pr-linking.test.ts src/github-gh.test.ts && bun e2e/run-fixture.ts ready-success && bun e2e/run-fixture.ts pr-validation-fails-then-fix",
+    "test:unit": "bun test src/orchestrator.test.ts src/pr-linking.test.ts src/github-gh.test.ts",
     "test:e2e": "bun e2e/run-fixture.ts ready-success && bun e2e/run-fixture.ts pr-validation-fails-then-fix",
     "smoke:live": "bun e2e/run-live.ts",
     "smoke:create-ecommerce-issues": "bash e2e/create-ecommerce-issues.sh",

@@ -373,8 +373,12 @@ function backlogHarnessConfig(
     maxParallelWorkflows: config.maxParallelWorkflows,
     maxOpenAgentPrs: config.maxOpenAgentPrs,
     maxNewRunsPerCycle: config.maxNewRunsPerCycle,
+    maxRunAttempts: config.maxRunAttempts,
+    maxFixAttempts: config.maxFixAttempts,
+    conflictWorkflowName: config.conflictWorkflowName,
     areaLockPolicy: config.areaLockPolicy,
     workflowLabelToName: config.workflowLabelToName,
+    workflowLabelsCompletingWithoutPr: config.workflowLabelsCompletingWithoutPr,
     autoMergeEnabled: config.autoMergeEnabled,
   };
 }

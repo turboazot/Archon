@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
   HarnessOrchestrator,
+  DEMO_WORKFLOW_LABELS_COMPLETING_WITHOUT_PR,
+  DEMO_WORKFLOW_LABEL_TO_NAME,
   createDefaultHarnessConfig,
   type HarnessOrchestratorConfig,
 } from './orchestrator';
@@ -14,6 +16,13 @@ import {
 
 const repo = 'owner/harness';
 const fixedNow = new Date('2026-04-30T00:00:00.000Z');
+const demoWorkflowConfig = {
+  workflowLabelToName: {
+    ...createDefaultHarnessConfig().workflowLabelToName,
+    ...DEMO_WORKFLOW_LABEL_TO_NAME,
+  },
+  workflowLabelsCompletingWithoutPr: [...DEMO_WORKFLOW_LABELS_COMPLETING_WITHOUT_PR],
+};
 
 function createHarness(
   input: ConstructorParameters<typeof InMemoryGitHub>[0],
@@ -63,14 +72,17 @@ describe('HarnessOrchestrator', () => {
   });
 
   test('starts the video recording workflow from its routing label', async () => {
-    const { archon, orchestrator } = createHarness({
-      issues: [
-        makeIssue({
-          number: 1,
-          labels: ['archon:ready', 'archon-workflow:video-recording', 'area:test'],
-        }),
-      ],
-    });
+    const { archon, orchestrator } = createHarness(
+      {
+        issues: [
+          makeIssue({
+            number: 1,
+            labels: ['archon:ready', 'archon-workflow:video-recording', 'area:test'],
+          }),
+        ],
+      },
+      demoWorkflowConfig
+    );
 
     await orchestrator.reconcileOnce();
 
@@ -78,14 +90,17 @@ describe('HarnessOrchestrator', () => {
   });
 
   test('marks configured PR-less workflows done after successful completion', async () => {
-    const { archon, github, store, orchestrator } = createHarness({
-      issues: [
-        makeIssue({
-          number: 1,
-          labels: ['archon:ready', 'archon-workflow:video-recording', 'area:test'],
-        }),
-      ],
-    });
+    const { archon, github, store, orchestrator } = createHarness(
+      {
+        issues: [
+          makeIssue({
+            number: 1,
+            labels: ['archon:ready', 'archon-workflow:video-recording', 'area:test'],
+          }),
+        ],
+      },
+      demoWorkflowConfig
+    );
 
     await orchestrator.reconcileOnce();
     const workflowRun = archon.getStartedRuns()[0];
@@ -969,6 +984,7 @@ describe('HarnessOrchestrator', () => {
         ],
       },
       {
+        ...demoWorkflowConfig,
         areaLockPolicy: 'none',
         maxParallelWorkflows: 2,
         maxOpenAgentPrs: 2,

@@ -83,7 +83,7 @@ export class GitHubGhAdapter implements GitHubPort {
       '--state',
       'open',
       '--limit',
-      '100',
+      '1000',
       '--json',
       'number,title,body,state,labels',
     ]);
@@ -120,7 +120,7 @@ export class GitHubGhAdapter implements GitHubPort {
       '--state',
       'all',
       '--limit',
-      '100',
+      '1000',
       '--json',
       'number,body,headRefName,baseRefName,state,isDraft,labels,files,mergeable,reviewDecision,statusCheckRollup',
     ]);
@@ -339,8 +339,8 @@ function mapPullRequestState(state: string): HarnessPullRequest['state'] {
   return state === 'CLOSED' ? 'closed' : 'open';
 }
 
-function mapCheckState(rollup: GhPullRequest['statusCheckRollup']): CheckState {
-  if (rollup.length === 0) return 'passing';
+export function mapCheckState(rollup: GhPullRequest['statusCheckRollup']): CheckState {
+  if (rollup.length === 0) return 'pending';
   if (
     rollup.some(check =>
       ['FAILURE', 'ERROR', 'TIMED_OUT', 'ACTION_REQUIRED', 'CANCELLED'].includes(

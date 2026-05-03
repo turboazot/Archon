@@ -21,6 +21,10 @@ comment idempotency keys, retry counts, and changed file snapshots.
 Production smoke scenarios should stay explicit and disposable. They are
 validation paths for this package, not the feature boundary itself.
 
+Auto-merge is intentionally conservative: a PR with no status checks is treated
+as pending, not passing. Configure at least one required check on repositories
+where `archon:auto-merge` is used.
+
 ## Tests And Smoke
 
 Deterministic fixture E2E runs live with the package:
@@ -35,37 +39,29 @@ repository comes from `.archon/config.yaml` `backlog.projects`; pass
 
 ```bash
 ARCHON_BASE_URL=http://localhost:3090 \
-bun --filter @archon/backlog-orchestrator smoke:live -- --project X15 --preflight
+bun --filter @archon/backlog-orchestrator smoke:live -- --repo owner/name --preflight
 ```
 
 Focused one-issue workflow-owned auto-merge smoke:
 
 ```bash
 ARCHON_BASE_URL=http://localhost:3090 \
-bun --filter @archon/backlog-orchestrator smoke:live -- --project X15 --scenario single-auto-merge
+bun --filter @archon/backlog-orchestrator smoke:live -- --repo owner/name --scenario single-auto-merge
 ```
 
-Before running the full ecommerce auto-merge smoke from scratch, reset the X15
-repository's `main` branch to the baseline commit `732cff8`:
+Run the full scratch ecommerce auto-merge smoke against a disposable repository.
+`ARCHON_BASE_URL` defaults to `http://localhost:3090`, so it can be omitted when
+Archon is running locally:
 
 ```bash
-git -C /home/ubuntu/.archon/workspaces/podlodka-ai-club/X15/source fetch origin main
-git -C /home/ubuntu/.archon/workspaces/podlodka-ai-club/X15/source reset --hard 732cff87028fa594d7d2c205dae3f1c5968c4e30
-git -C /home/ubuntu/.archon/workspaces/podlodka-ai-club/X15/source push --force-with-lease origin main
-```
-
-Run the full scratch ecommerce auto-merge smoke. `ARCHON_BASE_URL` defaults to
-`http://localhost:3090`, so it can be omitted when Archon is running locally:
-
-```bash
-bun --filter @archon/backlog-orchestrator smoke:live -- --project X15 --scenario ecommerce-app-auto-merge
+bun --filter @archon/backlog-orchestrator smoke:live -- --repo owner/name --scenario ecommerce-app-auto-merge
 ```
 
 To only seed the ecommerce test GitHub issues and let an already-running backlog
 orchestrator pick them up:
 
 ```bash
-bun --filter @archon/backlog-orchestrator smoke:create-ecommerce-issues
+bun --filter @archon/backlog-orchestrator smoke:create-ecommerce-issues -- --repo owner/name
 ```
 
 The helper creates plain issue titles by default, without an `[archon-test:...]`
@@ -81,9 +77,8 @@ Recommended preflight before starting:
 
 ```bash
 curl -fsS http://localhost:3090/health
-gh issue list -R podlodka-ai-club/X15 --label archon-test --state open
-gh pr list -R podlodka-ai-club/X15 --state open --head 'archon-test/*'
-git -C /home/ubuntu/.archon/workspaces/podlodka-ai-club/X15/source status --short
+gh issue list -R owner/name --label archon-test --state open
+gh pr list -R owner/name --state open --head 'archon-test/*'
 ```
 
 A passing scratch run creates four disposable issues, three PRs, and one video
@@ -103,7 +98,7 @@ Success criteria:
 - result artifact has `"completedEarly": true`
 - all session issues are closed with `archon:done`
 - all session PRs are `MERGED`
-- `origin/main` contains the three ecommerce merge commits on top of `732cff8`
+- the target repository contains the expected smoke-test merge commits
 
 Useful checks after a run:
 
@@ -113,16 +108,13 @@ SESSION_ID=2026-05-01T18-13-44-278Z
 jq '{sessionId, scenario, completedEarly}' \
   "packages/backlog-orchestrator/e2e/results/${SESSION_ID}/result.json"
 
-gh issue list -R podlodka-ai-club/X15 --label archon-test --state all --limit 20 \
+gh issue list -R owner/name --label archon-test --state all --limit 20 \
   --json number,title,state,closedAt,labels \
   | jq -r --arg session "$SESSION_ID" \
     '.[] | select(.title|contains($session)) | "#\(.number) \(.state) labels=[\([.labels[].name]|join(","))] \(.title)"'
 
-gh pr list -R podlodka-ai-club/X15 --state all --limit 20 \
+gh pr list -R owner/name --state all --limit 20 \
   --json number,title,state,mergedAt,headRefName,mergeable,isDraft \
   | jq -r --arg session "$SESSION_ID" \
     '.[] | select(.headRefName and (.headRefName|contains($session))) | "#\(.number) \(.state) draft=\(.isDraft) \(.headRefName) merged=\(.mergedAt) \(.title)"'
-
-git -C /home/ubuntu/.archon/workspaces/podlodka-ai-club/X15/source fetch origin main
-git -C /home/ubuntu/.archon/workspaces/podlodka-ai-club/X15/source log --oneline -4 origin/main
 ```

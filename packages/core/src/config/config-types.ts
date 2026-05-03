@@ -228,8 +228,12 @@ export interface RepoConfig {
     maxParallelWorkflows?: number;
     maxOpenAgentPrs?: number;
     maxNewRunsPerCycle?: number;
+    maxRunAttempts?: number;
+    maxFixAttempts?: number;
+    conflictWorkflowName?: string;
     areaLockPolicy?: 'none' | 'conservative';
     workflowLabelToName?: Record<string, string>;
+    workflowLabelsCompletingWithoutPr?: string[];
     autoMergeEnabled?: boolean;
   };
 
@@ -269,8 +273,12 @@ export interface BacklogProjectConfig {
   maxParallelWorkflows?: number;
   maxOpenAgentPrs?: number;
   maxNewRunsPerCycle?: number;
+  maxRunAttempts?: number;
+  maxFixAttempts?: number;
+  conflictWorkflowName?: string;
   areaLockPolicy?: 'none' | 'conservative';
   workflowLabelToName?: Record<string, string>;
+  workflowLabelsCompletingWithoutPr?: string[];
   autoMergeEnabled?: boolean;
 }
 
@@ -332,8 +340,12 @@ export interface MergedConfig {
     maxParallelWorkflows?: number;
     maxOpenAgentPrs?: number;
     maxNewRunsPerCycle?: number;
+    maxRunAttempts?: number;
+    maxFixAttempts?: number;
+    conflictWorkflowName?: string;
     areaLockPolicy?: 'none' | 'conservative';
     workflowLabelToName?: Record<string, string>;
+    workflowLabelsCompletingWithoutPr?: string[];
     autoMergeEnabled?: boolean;
   };
 }

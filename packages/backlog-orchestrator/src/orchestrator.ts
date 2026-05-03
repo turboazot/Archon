@@ -19,7 +19,11 @@ import type {
   StoredOrchestratorRun,
 } from './types';
 
-export { createDefaultHarnessConfig } from './config';
+export {
+  DEMO_WORKFLOW_LABELS_COMPLETING_WITHOUT_PR,
+  DEMO_WORKFLOW_LABEL_TO_NAME,
+  createDefaultHarnessConfig,
+} from './config';
 export type {
   ArchonPort,
   AreaLockPolicy,

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="podlodka-ai-club/X15"
+repo=""
 session_id="$(date -u +"%Y-%m-%dT%H-%M-%S-%3NZ")"
 auto_merge=1
 title_prefix=""
 
 usage() {
   cat <<'EOF'
-Usage: create-ecommerce-issues.sh [--repo owner/name] [--session id] [--title-prefix text] [--no-auto-merge]
+Usage: create-ecommerce-issues.sh --repo owner/name [--session id] [--title-prefix text] [--no-auto-merge]
 
 Creates four disposable ecommerce live test issues with Archon backlog labels:
   1. Ecommerce app skeleton
@@ -50,6 +50,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "$repo" ]]; then
+  echo "Missing required --repo owner/name" >&2
+  usage >&2
+  exit 2
+fi
 
 if [[ "$repo" != */* ]]; then
   echo "--repo must be owner/name" >&2
