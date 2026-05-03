@@ -54,6 +54,7 @@ const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
+  getProjectWorktreesPath: mock(() => '/home/test/.archon/workspaces/owner/repo/worktrees'),
   getArchonHome: mock(() => '/home/test/.archon'),
 }));
 
@@ -134,9 +135,11 @@ mock.module('../workflows/store-adapter', () => ({
 }));
 
 const mockGetPausedWorkflowRun = mock(() => Promise.resolve(null as unknown));
+const mockGetWorkflowRun = mock(() => Promise.resolve(null as unknown));
 const mockFindResumableRunByParentConversation = mock(() => Promise.resolve(null as unknown));
 mock.module('../db/workflows', () => ({
   getPausedWorkflowRun: mockGetPausedWorkflowRun,
+  getWorkflowRun: mockGetWorkflowRun,
   findResumableRunByParentConversation: mockFindResumableRunByParentConversation,
   updateWorkflowRun: mock(() => Promise.resolve()),
 }));
@@ -903,12 +906,14 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockToRepoPath.mockClear();
     mockGetOrCreateConversation.mockReset();
     mockGetCodebase.mockReset();
+    mockListCodebases.mockReset();
     mockSendQuery.mockClear();
     mockGetCodebaseEnvVars.mockReset();
     mockLoadConfig.mockReset();
     // Reset mocks between tests in this suite and restore safe defaults
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
     mockGetCodebaseEnvVars.mockImplementation(() => Promise.resolve({}));
     mockLoadConfig.mockImplementation(() =>
       Promise.resolve({
@@ -1047,6 +1052,44 @@ describe('discoverAllWorkflows — remote sync', () => {
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
     expect(requestOptions.env).toEqual({ FILE_SECRET: 'file-value' });
   });
+
+  test('explicit project mention switches a scoped conversation before routing', async () => {
+    const oldCodebase = {
+      ...makeCodebaseForSync(),
+      id: 'old-codebase',
+      name: 'archon-products-api',
+      default_cwd: '/repos/archon-products-api',
+    };
+    const x15Codebase = {
+      ...makeCodebaseForSync(),
+      id: 'x15-codebase',
+      name: 'podlodka-ai-club/X15',
+      default_cwd: '/repos/X15',
+    };
+    const conversation = makeConversation({ codebase_id: oldCodebase.id });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([oldCodebase, x15Codebase]));
+    mockGetCodebase.mockImplementation(id =>
+      Promise.resolve(id === x15Codebase.id ? x15Codebase : oldCodebase)
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Please create a PR in X15 that adds a license');
+
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', {
+      codebase_id: x15Codebase.id,
+      cwd: x15Codebase.default_cwd,
+      isolation_env_id: null,
+    });
+    expect(mockTransitionSession).toHaveBeenCalledWith('conv-1', 'isolation-changed', {
+      ai_assistant_type: 'claude',
+      codebase_id: x15Codebase.id,
+    });
+    expect(mockSendQuery).toHaveBeenCalled();
+    expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/X15', undefined, {
+      resetAfterFetch: false,
+    });
+  });
 });
 
 // ─── Workflow dispatch routing — interactive flag ─────────────────────────────
@@ -1083,6 +1126,8 @@ describe('workflow dispatch routing — interactive flag', () => {
   beforeEach(() => {
     mockExecuteWorkflow.mockClear();
     mockDispatchBackgroundWorkflow.mockClear();
+    mockFindResumableRunByParentConversation.mockReset();
+    mockFindResumableRunByParentConversation.mockImplementation(() => Promise.resolve(null));
     mockHandleCommand.mockReset();
     mockHandleCommand.mockImplementation(() =>
       Promise.resolve({ success: true, message: 'ok', workflow: undefined })
@@ -1111,12 +1156,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(callArgs[10]).toBe('conv-1'); // parentConversationId = conversation.id
   });
 
-  test('foreground_resume_detected: passes parentConversationId to executeWorkflow when a resumable run exists', async () => {
-    // Regression for the foreground-resume branch added as part of the
-    // auto-resume fix: when `findResumableRunByParentConversation` returns a
-    // paused run, the orchestrator picks the working_path from that run and
-    // must still carry parentConversationId forward so the API helpers can
-    // keep dispatching resume on subsequent approvals.
+  test('explicit workflow run starts fresh even when a resumable run exists', async () => {
+    // A user-issued `/workflow run ...` means "start this workflow now"; it should
+    // not silently resume a previous failed/approved run in the same conversation.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
@@ -1134,9 +1176,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
+    expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    // cwd (position 3) should come from the resumable run's working_path
-    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
+    // cwd (position 3) should come from the freshly resolved isolation path.
+    expect(callArgs[3]).toBe('/test/cwd');
     // parentConversationId (position 10) should still be the caller conversation id
     expect(callArgs[10]).toBe('conv-1');
   });
@@ -1208,6 +1251,8 @@ describe('natural-language approval routing', () => {
   beforeEach(() => {
     mockGetPausedWorkflowRun.mockReset();
     mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(null));
+    mockGetWorkflowRun.mockReset();
+    mockGetWorkflowRun.mockImplementation(() => Promise.resolve(null));
     mockCreateWorkflowEvent.mockReset();
     mockCreateWorkflowEvent.mockImplementation(() => Promise.resolve());
     mockGetOrCreateConversation.mockReset();
@@ -1258,6 +1303,34 @@ describe('natural-language approval routing', () => {
 
     expect(mockGetPausedWorkflowRun).not.toHaveBeenCalled();
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+  });
+
+  test('slash workflow approve command records approval and dispatches resume', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1', cwd: '/repos/test-repo' });
+    const codebase = makeApprovalCodebase();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockParseCommand.mockImplementation(() => ({
+      command: 'workflow',
+      args: ['approve', 'run-1'],
+    }));
+    mockHandleCommand.mockReturnValueOnce(
+      Promise.resolve({ success: true, message: 'Workflow approved.', workflow: undefined })
+    );
+    mockGetWorkflowRun.mockReturnValueOnce(Promise.resolve(makePausedRun({ status: 'failed' })));
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [{ workflow: approvalWorkflow }], errors: [] })
+    );
+    mockGetCodebase.mockImplementation(() => Promise.resolve(codebase));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow approve run-1');
+
+    expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', 'Workflow approved.');
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Resuming')
+    );
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
   });
 
   test('message with no paused workflow routes normally', async () => {

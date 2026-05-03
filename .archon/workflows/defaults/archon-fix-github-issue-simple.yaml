@@ -15,17 +15,31 @@ modelReasoningEffort: medium
 
 nodes:
   - id: extract-issue-number
-    prompt: |
-      Find the GitHub issue number for this request.
+    bash: |
+      set -euo pipefail
 
-      Request: $ARGUMENTS
+      REQUEST=$(cat <<'EOF'
+      $ARGUMENTS
+      EOF
+      )
 
-      Rules:
-      - If the message contains an explicit issue number (e.g., "#123", "issue 123", "123"), extract that number.
-      - If the message is ambiguous, use `gh issue list` to search for matching issues and pick the best match.
+      CONTEXT_JSON=$(printf '%s\n' "$REQUEST" | sed -nE 's/^ARCHON_BACKLOG_CONTEXT_JSON: (.+)$/\1/p' | head -1)
+      ISSUE_NUM=""
 
-      CRITICAL: Your final output must be ONLY the bare number with no quotes, no markdown, no explanation.
-      Example correct output: 123
+      if [ -n "$CONTEXT_JSON" ]; then
+        ISSUE_NUM=$(printf '%s' "$CONTEXT_JSON" | jq -r '.issueNumber // empty')
+      fi
+
+      if [ -z "$ISSUE_NUM" ]; then
+        ISSUE_NUM=$(printf '%s\n' "$REQUEST" | grep -oE '(Fix issue|Issue:)[[:space:]]*#[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+      fi
+
+      if [ -z "$ISSUE_NUM" ]; then
+        echo "Failed to parse issue number from workflow arguments" >&2
+        exit 1
+      fi
+
+      printf '%s\n' "$ISSUE_NUM"
 
   - id: fetch-issue
     bash: |
@@ -50,14 +64,24 @@ nodes:
       EOF
       )
 
-      BRANCH=$(printf '%s\n' "$REQUEST" | grep -oE 'Use branch: [^[:space:]]+' | head -1 | sed -E 's/^Use branch: //')
+      CONTEXT_JSON=$(printf '%s\n' "$REQUEST" | sed -nE 's/^ARCHON_BACKLOG_CONTEXT_JSON: (.+)$/\1/p' | head -1)
+      BRANCH=""
+
+      if [ -n "$CONTEXT_JSON" ]; then
+        BRANCH=$(printf '%s' "$CONTEXT_JSON" | jq -r '.branch // empty')
+      fi
+
+      if [ -z "$BRANCH" ]; then
+        BRANCH=$(printf '%s\n' "$REQUEST" | grep -oE 'Use branch: [^[:space:]]+' | head -1 | sed -E 's/^Use branch: //' || true)
+      fi
+
       if [ -z "$BRANCH" ]; then
         echo "Missing required Use branch field" >&2
         exit 1
       fi
 
       case "$BRANCH" in
-        archon-e2e/*|fix/*|feature/*|bugfix/*|chore/*) ;;
+        archon/*|archon-test/*|fix/*|feature/*|bugfix/*|chore/*) ;;
         *)
           echo "Refusing unsafe branch name: $BRANCH" >&2
           exit 1

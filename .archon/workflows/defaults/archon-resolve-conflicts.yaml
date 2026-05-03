@@ -28,27 +28,21 @@ nodes:
       EOF
       )
 
-      PR_NUMBER=$(printf '%s\n' "$REQUEST" | grep -oE 'PR: #[0-9]+' | head -1 | grep -oE '[0-9]+')
-      if [ -z "$PR_NUMBER" ]; then
-        PR_NUMBER=$(printf '%s\n' "$REQUEST" | grep -oE '/pull/[0-9]+' | head -1 | grep -oE '[0-9]+')
-      fi
-      if [ -z "$PR_NUMBER" ]; then
-        PR_NUMBER=$(printf '%s\n' "$REQUEST" | grep -oE 'PR #[0-9]+' | head -1 | grep -oE '[0-9]+')
-      fi
-      if [ -z "$PR_NUMBER" ]; then
-        echo "Could not determine PR number from workflow arguments; leaving PR open." >&2
+      CONTEXT_JSON=$(printf '%s\n' "$REQUEST" | sed -nE 's/^ARCHON_BACKLOG_CONTEXT_JSON: (.+)$/\1/p' | head -1)
+      if [ -z "$CONTEXT_JSON" ]; then
+        echo "Missing ARCHON_BACKLOG_CONTEXT_JSON in workflow arguments; leaving PR open." >&2
         exit 0
       fi
 
-      ISSUE_NUM=$(printf '%s\n' "$REQUEST" | grep -oE 'Issue: #[0-9]+' | head -1 | grep -oE '[0-9]+')
-      if [ -z "$ISSUE_NUM" ]; then
-        ISSUE_NUM=$(gh pr view "$PR_NUMBER" --json body --jq '.body' |
-          grep -oE '(Fixes|Closes|Resolves)[[:space:]]+#[0-9]+' |
-          grep -oE '[0-9]+' |
-          head -1)
+      PR_NUMBER=$(printf '%s' "$CONTEXT_JSON" | jq -r '.prNumber // empty')
+      if [ -z "$PR_NUMBER" ]; then
+        echo "Missing prNumber in ARCHON_BACKLOG_CONTEXT_JSON; leaving PR open." >&2
+        exit 0
       fi
+
+      ISSUE_NUM=$(printf '%s' "$CONTEXT_JSON" | jq -r '.issueNumber // empty')
       if [ -z "$ISSUE_NUM" ]; then
-        echo "Could not determine issue number for PR #$PR_NUMBER; leaving PR open." >&2
+        echo "Missing issueNumber in ARCHON_BACKLOG_CONTEXT_JSON for PR #$PR_NUMBER; leaving PR open." >&2
         exit 0
       fi
 
@@ -57,10 +51,20 @@ nodes:
         exit 0
       fi
 
-      PR_STATE=$(gh pr view "$PR_NUMBER" --json state,isDraft,mergeable --jq '.state + " " + (.isDraft|tostring) + " " + .mergeable')
-      STATE=$(printf '%s\n' "$PR_STATE" | awk '{print $1}')
-      IS_DRAFT=$(printf '%s\n' "$PR_STATE" | awk '{print $2}')
-      MERGEABLE=$(printf '%s\n' "$PR_STATE" | awk '{print $3}')
+      MERGEABLE="UNKNOWN"
+      for attempt in 1 2 3 4 5; do
+        PR_STATE=$(gh pr view "$PR_NUMBER" --json state,isDraft,mergeable --jq '.state + " " + (.isDraft|tostring) + " " + .mergeable')
+        STATE=$(printf '%s\n' "$PR_STATE" | awk '{print $1}')
+        IS_DRAFT=$(printf '%s\n' "$PR_STATE" | awk '{print $2}')
+        MERGEABLE=$(printf '%s\n' "$PR_STATE" | awk '{print $3}')
+
+        if [ "$MERGEABLE" != "UNKNOWN" ]; then
+          break
+        fi
+
+        echo "PR #$PR_NUMBER mergeability is UNKNOWN; waiting for GitHub recalculation ($attempt/5)."
+        sleep 3
+      done
 
       if [ "$STATE" != "OPEN" ]; then
         echo "PR #$PR_NUMBER is $STATE; nothing to merge."

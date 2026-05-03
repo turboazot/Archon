@@ -4,17 +4,20 @@ set -euo pipefail
 repo="podlodka-ai-club/X15"
 session_id="$(date -u +"%Y-%m-%dT%H-%M-%S-%3NZ")"
 auto_merge=1
+title_prefix=""
 
 usage() {
   cat <<'EOF'
-Usage: create-ecommerce-issues.sh [--repo owner/name] [--session id] [--no-auto-merge]
+Usage: create-ecommerce-issues.sh [--repo owner/name] [--session id] [--title-prefix text] [--no-auto-merge]
 
-Creates the three disposable ecommerce live E2E issues with Archon backlog labels:
+Creates four disposable ecommerce live test issues with Archon backlog labels:
   1. Ecommerce app skeleton
   2. Ecommerce catalog interactions
   3. Ecommerce cart and checkout
+  4. Record ecommerce Playwright video
 
-The catalog and cart/checkout issues are marked as blocked by the skeleton issue.
+The catalog and cart/checkout issues are blocked by the skeleton issue.
+The video recording issue is blocked by catalog and cart/checkout.
 EOF
 }
 
@@ -26,6 +29,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --session)
       session_id="${2:?Missing value for --session}"
+      shift 2
+      ;;
+    --title-prefix)
+      title_prefix="${2:?Missing value for --title-prefix}"
       shift 2
       ;;
     --no-auto-merge)
@@ -118,10 +125,7 @@ write_body() {
   shift 3
 
   {
-    echo "This disposable issue was created by the Archon harness ecommerce app live E2E runner."
-    echo
-    echo "Session: $session_id"
-    echo "Role: $role"
+    echo "This disposable issue was created by the Archon harness ecommerce app live test runner."
     echo
     echo "Goal: $summary"
     echo
@@ -132,17 +136,15 @@ write_body() {
     done
     echo
     echo "Safety constraints:"
-    echo "- This is a live E2E test issue; keep the implementation intentionally small."
+    echo "- This is a live test issue; keep the implementation intentionally small."
     echo "- Do not add external services, auth, payments, persistence, deploy config, or CI changes."
     echo "- Let the agent choose the file layout that best fits the current repository state."
   } >"$path"
 }
 
 labels=(
-  "archon-e2e"
   "archon:ready"
   "archon-workflow:fix-issue-simple"
-  "area:e2e"
 )
 
 if [[ "$auto_merge" -eq 1 ]]; then
@@ -152,15 +154,15 @@ else
   pr_merge_instruction="Open a PR but do not auto-merge this issue."
 fi
 
-ensure_label "archon-e2e" "d4c5f9"
 ensure_label "archon:ready"
 ensure_label "archon-workflow:fix-issue-simple"
+ensure_label "archon-workflow:video-recording"
 ensure_label "archon:auto-merge"
-ensure_label "area:e2e"
 
 skeleton_body="$tmp_dir/skeleton.md"
 catalog_body="$tmp_dir/catalog.md"
 cart_body="$tmp_dir/cart-checkout.md"
+video_body="$tmp_dir/video-recording.md"
 
 write_body \
   "$skeleton_body" \
@@ -192,26 +194,49 @@ write_body \
   "Wire cart and checkout behavior into the existing storefront UI while minimizing conflicts with catalog work." \
   "$pr_merge_instruction"
 
-echo "Creating ecommerce E2E issues in $repo"
+write_body \
+  "$video_body" \
+  "video-recording" \
+  "Record a short Playwright video after the ecommerce app work is complete." \
+  "Inspect the repository and identify the simplest runnable user-facing UI." \
+  "Start the application locally using the repo conventions." \
+  "Exercise one short happy path that a real user would recognize as the app working." \
+  "Prefer a path that reaches a meaningful loaded or interactive state rather than only checking that the page renders." \
+  "Record the browser session while performing the flow and produce a final MP4 artifact." \
+  "Add brief pauses after the page loads, after meaningful interactions, and on the final success state so the recording is easy to follow." \
+  "Verify at least one visible outcome that proves the happy path succeeded." \
+  "Comment on this issue with the GitHub-hosted raw MP4 link."
+
+echo "Creating ecommerce test issues in $repo"
 echo "Session: $session_id"
 
 skeleton_number="$(
-  create_issue "[archon-e2e:$session_id] Ecommerce app skeleton" "$skeleton_body" "${labels[@]}"
+  create_issue "${title_prefix}Ecommerce app skeleton" "$skeleton_body" "${labels[@]}"
 )"
 catalog_number="$(
-  create_issue "[archon-e2e:$session_id] Ecommerce catalog interactions" "$catalog_body" "${labels[@]}"
+  create_issue "${title_prefix}Ecommerce catalog interactions" "$catalog_body" "${labels[@]}"
 )"
 cart_number="$(
-  create_issue "[archon-e2e:$session_id] Ecommerce cart and checkout" "$cart_body" "${labels[@]}"
+  create_issue "${title_prefix}Ecommerce cart and checkout" "$cart_body" "${labels[@]}"
+)"
+video_number="$(
+  create_issue \
+    "${title_prefix}Record ecommerce Playwright video" \
+    "$video_body" \
+    "archon:ready" \
+    "archon-workflow:video-recording"
 )"
 
 add_blocked_by "$catalog_number" "$skeleton_number"
 add_blocked_by "$cart_number" "$skeleton_number"
+add_blocked_by "$video_number" "$catalog_number"
+add_blocked_by "$video_number" "$cart_number"
 
 echo "Created issues:"
 echo "  Skeleton:      #$skeleton_number"
 echo "  Catalog:       #$catalog_number blocked by #$skeleton_number"
 echo "  Cart checkout: #$cart_number blocked by #$skeleton_number"
+echo "  Video:         #$video_number blocked by #$catalog_number and #$cart_number"
 echo
 echo "View them:"
-echo "  gh issue list --repo $repo --search \"archon-e2e:$session_id\" --state all"
+echo "  gh issue list --repo $repo --search \"$session_id\" --state all"

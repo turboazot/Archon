@@ -1,0 +1,325 @@
+name: archon-small-interactive-prd
+description: |
+  Use when: User wants to clarify a vague issue or idea through a short interactive PRD flow, then implement it.
+  Triggers: "small interactive prd", "brainstorm then implement", "clarify issue", "interactive feature planning".
+  Does: Asks focused product questions -> writes a tiny implementation-ready plan -> waits for approval -> implements, validates, and opens a PR.
+  NOT for: Deep product discovery, market research, large PRDs, or multi-phase roadmap planning.
+
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: medium
+interactive: true
+
+nodes:
+  - id: brainstorm
+    prompt: |
+      You are helping clarify a vague feature request before implementation.
+      Keep this short and conversational.
+
+      ## Initial Request
+
+      $ARGUMENTS
+
+      ## Your Task
+
+      Restate the request in 1-2 sentences, then ask exactly three questions:
+
+      1. Who is this for?
+      2. What is the smallest useful version?
+      3. How will we know the change worked?
+
+      Do not create a PRD yet. Do not inspect the codebase yet.
+
+  - id: brainstorm-gate
+    approval:
+      message: "Answer the three questions. Keep it rough; I will turn it into a tiny implementation plan."
+      capture_response: true
+    depends_on: [brainstorm]
+
+  - id: write-plan
+    depends_on: [brainstorm-gate]
+    prompt: |
+      You are turning a clarified idea into a tiny implementation-ready plan.
+
+      ## Initial Request
+
+      $ARGUMENTS
+
+      ## User Answers
+
+      $brainstorm-gate.output
+
+      ## Instructions
+
+      Briefly inspect the codebase to find the likely files and existing patterns.
+      Keep the plan intentionally small: one PR, ideally 1-3 files changed.
+
+      Write the plan to `$ARTIFACTS_DIR/plan.md`.
+
+      The plan must include:
+
+      # Small Interactive PRD
+
+      ## Problem
+      Who has the problem and what hurts.
+
+      ## Smallest Useful Version
+      The exact v1 behavior.
+
+      ## Implementation Plan
+      A short checklist with likely files to change. Prefer extending existing code.
+
+      ## Acceptance Criteria
+      3-5 concrete checks.
+
+      ## Validation Commands
+      Commands the implementation should run.
+
+      After writing the file, output only:
+      - a concise summary of the plan
+      - "The workflow will publish `plan.md` to the branch next."
+      - "Please approve this plan or request changes after the branch link appears."
+
+      Do not create a markdown link to `$ARTIFACTS_DIR/plan.md`.
+      Do not mention local filesystem paths.
+
+  - id: publish-plan-to-branch
+    depends_on: [write-plan]
+    bash: |
+      set -euo pipefail
+
+      PLAN_SOURCE="$ARTIFACTS_DIR/plan.md"
+      PLAN_TARGET="plan.md"
+
+      if [ ! -s "$PLAN_SOURCE" ]; then
+        echo "Plan file is missing or empty: $PLAN_SOURCE" >&2
+        exit 1
+      fi
+
+      mkdir -p "$(dirname "$PLAN_TARGET")"
+      cp "$PLAN_SOURCE" "$PLAN_TARGET"
+      echo "$PLAN_TARGET" > "$ARTIFACTS_DIR/.branch-plan-path"
+
+      git add "$PLAN_TARGET"
+      if git diff --cached --quiet -- "$PLAN_TARGET"; then
+        echo "Plan already published to branch at $PLAN_TARGET"
+      else
+        git commit -m "docs: add temporary Archon implementation plan"
+      fi
+
+      git push -u origin HEAD
+
+      REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')
+      BRANCH=$(git branch --show-current)
+      PLAN_URL="https://github.com/${REPO}/blob/${BRANCH}/${PLAN_TARGET}"
+      echo "$PLAN_URL" > "$ARTIFACTS_DIR/.branch-plan-url"
+
+      ISSUE_NUM=$(printf '%s\n' "$BRANCH" | sed -nE 's#(^|.*/)(issue|issues)-([0-9]+).*#\3#p' | head -1)
+      if [ -n "$ISSUE_NUM" ]; then
+        gh issue comment "$ISSUE_NUM" --body "Published the plan to the branch: ${PLAN_URL}"
+      fi
+
+      echo "Published temporary plan to branch: $PLAN_URL"
+
+  - id: plan-gate
+    approval:
+      message: "Approve this small plan to implement it, or reply with edits to apply before implementation."
+      capture_response: true
+      on_reject:
+        max_attempts: 10
+        prompt: |
+          The user rejected the current small plan and provided revision feedback.
+
+          ## Revision Feedback
+
+          $REJECTION_REASON
+
+          ## Task
+
+          Read `$ARTIFACTS_DIR/plan.md`, apply the requested edits, and keep the plan small.
+
+          Do not implement anything yet.
+
+          After editing the artifact plan:
+          1. Copy `$ARTIFACTS_DIR/plan.md` to `plan.md` in the worktree.
+          2. Stage only `plan.md`.
+          3. Commit with `docs: update temporary Archon implementation plan` if it changed.
+          4. Push the current branch.
+          5. Compute the branch URL with:
+             `REPO=$(gh repo view --json nameWithOwner -q '.nameWithOwner')`
+             `BRANCH=$(git branch --show-current)`
+             `PLAN_URL="https://github.com/${REPO}/blob/${BRANCH}/plan.md"`
+
+          After editing, respond with:
+          - the updated GitHub branch URL for `plan.md`
+          - 2-3 bullets describing what changed
+          - a short note asking the user to approve or request more changes
+
+          Do not create markdown links to `$ARTIFACTS_DIR/plan.md`.
+          Do not mention local filesystem paths.
+    depends_on: [publish-plan-to-branch]
+
+  - id: refine-plan
+    depends_on: [plan-gate]
+    prompt: |
+      You are preparing the final plan for implementation.
+
+      Read `$ARTIFACTS_DIR/plan.md`.
+
+      ## User Approval / Edits
+
+      $plan-gate.output
+
+      If the user requested changes, edit `$ARTIFACTS_DIR/plan.md` to incorporate them.
+      If the user approved without changes, leave the plan as-is.
+
+      Output only:
+      - the final plan path
+      - 2-3 bullets summarizing the implementation scope
+
+  - id: update-issue-description
+    depends_on: [refine-plan]
+    bash: |
+      set -euo pipefail
+
+      PLAN_SOURCE="$ARTIFACTS_DIR/plan.md"
+      if [ ! -s "$PLAN_SOURCE" ]; then
+        echo "Plan file is missing or empty: $PLAN_SOURCE" >&2
+        exit 1
+      fi
+
+      ISSUE_NUM=""
+      BRANCH=$(git branch --show-current)
+
+      if [ -n "$BRANCH" ]; then
+        ISSUE_NUM=$(printf '%s\n' "$BRANCH" | sed -nE 's#(^|.*/)(issue|issues)-([0-9]+).*#\3#p' | head -1)
+      fi
+
+      if [ -z "$ISSUE_NUM" ]; then
+        REQUEST=$(cat <<'EOF'
+      $ARGUMENTS
+      EOF
+      )
+        ISSUE_NUM=$(printf '%s\n' "$REQUEST" | grep -oE '#[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+      fi
+
+      if [ -z "$ISSUE_NUM" ]; then
+        echo "No GitHub issue number found; skipping issue body update."
+        exit 0
+      fi
+
+      printf '%s\n' "$ISSUE_NUM" > "$ARTIFACTS_DIR/.issue-number"
+
+      CURRENT_BODY="$ARTIFACTS_DIR/issue-body-current.md"
+      UPDATED_BODY="$ARTIFACTS_DIR/issue-body-updated.md"
+      PLAN_BLOCK="$ARTIFACTS_DIR/issue-plan-block.md"
+
+      gh issue view "$ISSUE_NUM" --json body --jq '.body // ""' > "$CURRENT_BODY"
+
+      {
+        echo "<!-- archon-approved-plan:start -->"
+        echo
+        echo "## Archon Approved Plan"
+        echo
+        echo "This plan was approved through the Archon interactive PRD workflow."
+        echo
+        cat "$PLAN_SOURCE"
+        echo
+        echo "<!-- archon-approved-plan:end -->"
+      } > "$PLAN_BLOCK"
+
+      if grep -q '<!-- archon-approved-plan:start -->' "$CURRENT_BODY"; then
+        sed '/<!-- archon-approved-plan:start -->/,/<!-- archon-approved-plan:end -->/d' "$CURRENT_BODY" > "$UPDATED_BODY"
+      else
+        cp "$CURRENT_BODY" "$UPDATED_BODY"
+      fi
+
+      {
+        cat "$UPDATED_BODY"
+        if [ -s "$UPDATED_BODY" ]; then
+          echo
+          echo
+        fi
+        cat "$PLAN_BLOCK"
+      } > "$ARTIFACTS_DIR/issue-body-final.md"
+
+      gh issue edit "$ISSUE_NUM" --body-file "$ARTIFACTS_DIR/issue-body-final.md"
+      echo "Updated GitHub issue #$ISSUE_NUM with approved plan."
+
+  - id: plan-setup
+    command: archon-plan-setup
+    depends_on: [update-issue-description]
+    context: fresh
+
+  - id: implement-tasks
+    command: archon-implement-tasks
+    depends_on: [plan-setup]
+    context: fresh
+
+  - id: validate
+    command: archon-validate
+    depends_on: [implement-tasks]
+    context: fresh
+
+  - id: remove-branch-plan
+    depends_on: [validate]
+    bash: |
+      set -euo pipefail
+
+      PLAN_TARGET="plan.md"
+      if [ -s "$ARTIFACTS_DIR/.branch-plan-path" ]; then
+        PLAN_TARGET=$(cat "$ARTIFACTS_DIR/.branch-plan-path" | tr -d '\n')
+      fi
+
+      if [ -z "$PLAN_TARGET" ]; then
+        echo "No branch plan path recorded; nothing to remove."
+        exit 0
+      fi
+
+      if git ls-files --error-unmatch "$PLAN_TARGET" >/dev/null 2>&1; then
+        git rm -f "$PLAN_TARGET"
+      else
+        rm -f "$PLAN_TARGET"
+        git add -u "$PLAN_TARGET" 2>/dev/null || true
+      fi
+
+      if git diff --cached --quiet -- "$PLAN_TARGET"; then
+        echo "No temporary branch plan removal needed."
+      else
+        git commit -m "docs: remove temporary Archon implementation plan"
+        git push -u origin HEAD
+      fi
+
+      echo "Temporary branch plan removed before PR finalization."
+
+  - id: record-issue-number
+    depends_on: [remove-branch-plan]
+    bash: |
+      set -euo pipefail
+
+      ISSUE_NUM=""
+      BRANCH=$(git branch --show-current)
+
+      if [ -n "$BRANCH" ]; then
+        ISSUE_NUM=$(printf '%s\n' "$BRANCH" | sed -nE 's#(^|.*/)(issue|issues)-([0-9]+).*#\3#p' | head -1)
+      fi
+
+      if [ -z "$ISSUE_NUM" ]; then
+        REQUEST=$(cat <<'EOF'
+      $ARGUMENTS
+      EOF
+      )
+        ISSUE_NUM=$(printf '%s\n' "$REQUEST" | grep -oE '#[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+      fi
+
+      if [ -n "$ISSUE_NUM" ]; then
+        printf '%s\n' "$ISSUE_NUM" > "$ARTIFACTS_DIR/.issue-number"
+        echo "Recorded GitHub issue number for PR linking: #$ISSUE_NUM"
+      else
+        echo "No GitHub issue number found; PR finalization will not add a closing issue link."
+      fi
+
+  - id: finalize-pr
+    command: archon-finalize-pr
+    depends_on: [record-issue-number]
+    context: fresh

@@ -12,11 +12,11 @@ import { SqliteOrchestratorStore } from './support/sqlite-store';
 
 const RESULTS_ROOT = join(import.meta.dir, 'results');
 const DEFAULT_ENV_FILE = resolveDefaultEnvFile();
-const E2E_LABEL = 'archon-e2e';
-const TINY_ROUTING_LABEL = 'archon-workflow:e2e-tiny';
-const SELF_MERGE_ROUTING_LABEL = 'archon-workflow:e2e-tiny-self-merge';
+const TEST_LABEL = 'archon-test';
+const TINY_ROUTING_LABEL = 'archon-workflow:tiny';
+const SELF_MERGE_ROUTING_LABEL = 'archon-workflow:tiny-self-merge';
 const SIMPLE_FIX_ROUTING_LABEL = 'archon-workflow:fix-issue-simple';
-const VIDEO_RECORDING_ROUTING_LABEL = 'archon-workflow:e2e-video-recording';
+const VIDEO_RECORDING_ROUTING_LABEL = 'archon-workflow:video-recording';
 const ISSUE_SIZES = ['tiny', 'small'] as const;
 const SCENARIOS = [
   'single',
@@ -147,7 +147,7 @@ async function main(): Promise<void> {
           finalState,
           safety: {
             liveGate: 'smoke:live command',
-            markerLabel: E2E_LABEL,
+            markerLabel: TEST_LABEL,
             branchName: args.branchName ?? null,
           },
         },
@@ -171,16 +171,16 @@ async function main(): Promise<void> {
 
 async function ensureHarnessLabels(github: GitHubGhAdapter, repo: string): Promise<void> {
   const labels = [
-    E2E_LABEL,
+    TEST_LABEL,
     ...Object.values(LIFECYCLE_LABELS),
     TINY_ROUTING_LABEL,
     SELF_MERGE_ROUTING_LABEL,
     SIMPLE_FIX_ROUTING_LABEL,
     VIDEO_RECORDING_ROUTING_LABEL,
-    'area:e2e',
+    'area:test',
   ];
   for (const label of labels) {
-    await github.ensureLabel(repo, label, label === E2E_LABEL ? 'd4c5f9' : '5319e7');
+    await github.ensureLabel(repo, label, label === TEST_LABEL ? 'd4c5f9' : '5319e7');
   }
 }
 
@@ -285,7 +285,7 @@ function parseArgs(argv: string[]): LiveArgs {
     issueSize,
     branchName:
       scenario === 'single' || scenario === 'single-auto-merge' || scenario === 'video-recording'
-        ? `archon-e2e/${sessionId}`
+        ? `archon-test/${sessionId}`
         : undefined,
     envFile,
     preflightOnly,
@@ -307,7 +307,7 @@ async function loadEnvFile(path: string): Promise<void> {
     loaded += 1;
   }
   if (loaded > 0) {
-    process.stderr.write(`[archon-e2e] loaded ${String(loaded)} keys from ${path}\n`);
+    process.stderr.write(`[archon-test] loaded ${String(loaded)} keys from ${path}\n`);
   }
 }
 
@@ -345,7 +345,7 @@ async function createScenarioIssues(
       repo: target.repo,
       title: issueContent.title,
       body: issueContent.body,
-      labels: [E2E_LABEL, LIFECYCLE_LABELS.ready, TINY_ROUTING_LABEL, 'area:e2e'],
+      labels: [TEST_LABEL, LIFECYCLE_LABELS.ready, TINY_ROUTING_LABEL, 'area:test'],
     });
     return [issue];
   }
@@ -353,17 +353,17 @@ async function createScenarioIssues(
   if (args.scenario === 'single-auto-merge') {
     const issue = await github.createIssue({
       repo: target.repo,
-      title: `[archon-e2e:${args.sessionId}] Single auto-merge smoke issue`,
+      title: `[archon-test:${args.sessionId}] Single auto-merge smoke issue`,
       body: buildSelfMergeIssueBody({
         args,
         role: 'single-auto-merge',
       }),
       labels: [
-        E2E_LABEL,
+        TEST_LABEL,
         LIFECYCLE_LABELS.ready,
         SELF_MERGE_ROUTING_LABEL,
         LIFECYCLE_LABELS.autoMerge,
-        'area:e2e',
+        'area:test',
       ],
     });
     return [issue];
@@ -372,9 +372,9 @@ async function createScenarioIssues(
   if (args.scenario === 'video-recording') {
     const issue = await github.createIssue({
       repo: target.repo,
-      title: `[archon-e2e:${args.sessionId}] UI video recording smoke issue`,
+      title: `[archon-test:${args.sessionId}] UI video recording smoke issue`,
       body: buildVideoRecordingIssueBody(args),
-      labels: [E2E_LABEL, LIFECYCLE_LABELS.ready, VIDEO_RECORDING_ROUTING_LABEL, 'area:e2e'],
+      labels: [TEST_LABEL, LIFECYCLE_LABELS.ready, VIDEO_RECORDING_ROUTING_LABEL, 'area:test'],
     });
     return [issue];
   }
@@ -387,49 +387,49 @@ async function createScenarioIssues(
 
   const skeleton = await github.createIssue({
     repo: target.repo,
-    title: `[archon-e2e:${args.sessionId}] Skeleton smoke issue`,
+    title: `[archon-test:${args.sessionId}] Skeleton smoke issue`,
     body: buildSelfMergeIssueBody({
       args,
       role: 'skeleton',
     }),
     labels: [
-      E2E_LABEL,
+      TEST_LABEL,
       LIFECYCLE_LABELS.ready,
       SELF_MERGE_ROUTING_LABEL,
       LIFECYCLE_LABELS.autoMerge,
-      'area:e2e',
+      'area:test',
     ],
   });
 
   const firstBlocked = await github.createIssue({
     repo: target.repo,
-    title: `[archon-e2e:${args.sessionId}] Blocked parallel smoke A`,
+    title: `[archon-test:${args.sessionId}] Blocked parallel smoke A`,
     body: buildSelfMergeIssueBody({
       args,
       role: 'parallel-a',
     }),
     labels: [
-      E2E_LABEL,
+      TEST_LABEL,
       LIFECYCLE_LABELS.ready,
       SELF_MERGE_ROUTING_LABEL,
       LIFECYCLE_LABELS.autoMerge,
-      'area:e2e',
+      'area:test',
     ],
   });
 
   const secondBlocked = await github.createIssue({
     repo: target.repo,
-    title: `[archon-e2e:${args.sessionId}] Blocked parallel smoke B`,
+    title: `[archon-test:${args.sessionId}] Blocked parallel smoke B`,
     body: buildSelfMergeIssueBody({
       args,
       role: 'parallel-b',
     }),
     labels: [
-      E2E_LABEL,
+      TEST_LABEL,
       LIFECYCLE_LABELS.ready,
       SELF_MERGE_ROUTING_LABEL,
       LIFECYCLE_LABELS.autoMerge,
-      'area:e2e',
+      'area:test',
     ],
   });
 
@@ -484,11 +484,11 @@ async function createEcommerceAppIssues(
   options: { autoMergeAll: boolean }
 ): Promise<HarnessIssue[]> {
   const issueLabels = (autoMerge: boolean): string[] => [
-    E2E_LABEL,
+    TEST_LABEL,
     LIFECYCLE_LABELS.ready,
     SIMPLE_FIX_ROUTING_LABEL,
     ...(autoMerge ? [LIFECYCLE_LABELS.autoMerge] : []),
-    'area:e2e',
+    'area:test',
   ];
   const prMergeInstruction = options.autoMergeAll
     ? 'Open a PR and allow Archon to merge it automatically after verification.'
@@ -496,7 +496,7 @@ async function createEcommerceAppIssues(
 
   const skeleton = await github.createIssue({
     repo: target.repo,
-    title: `[archon-e2e:${args.sessionId}] Ecommerce app skeleton`,
+    title: `[archon-test:${args.sessionId}] Ecommerce app skeleton`,
     body: buildEcommerceAppIssueBody({
       args,
       role: 'skeleton',
@@ -513,7 +513,7 @@ async function createEcommerceAppIssues(
 
   const catalog = await github.createIssue({
     repo: target.repo,
-    title: `[archon-e2e:${args.sessionId}] Ecommerce catalog interactions`,
+    title: `[archon-test:${args.sessionId}] Ecommerce catalog interactions`,
     body: buildEcommerceAppIssueBody({
       args,
       role: 'catalog',
@@ -531,7 +531,7 @@ async function createEcommerceAppIssues(
 
   const cartCheckout = await github.createIssue({
     repo: target.repo,
-    title: `[archon-e2e:${args.sessionId}] Ecommerce cart and checkout`,
+    title: `[archon-test:${args.sessionId}] Ecommerce cart and checkout`,
     body: buildEcommerceAppIssueBody({
       args,
       role: 'cart-checkout',
@@ -558,7 +558,7 @@ async function createEcommerceAppIssues(
 }
 
 function buildIssueContent(args: LiveArgs): { title: string; body: string } {
-  const artifactPath = `archon-e2e/${args.sessionId}.md`;
+  const artifactPath = `archon-test/${args.sessionId}.md`;
   const header = [
     'This disposable issue was created by the Archon harness E2E runner.',
     '',
@@ -570,7 +570,7 @@ function buildIssueContent(args: LiveArgs): { title: string; body: string } {
 
   if (args.issueSize === 'tiny') {
     return {
-      title: `[archon-e2e:${args.sessionId}] Tiny smoke issue`,
+      title: `[archon-test:${args.sessionId}] Tiny smoke issue`,
       body: [
         ...header,
         'Goal: prove the end-to-end loop with the smallest possible repository change.',
@@ -585,7 +585,7 @@ function buildIssueContent(args: LiveArgs): { title: string; body: string } {
   }
 
   return {
-    title: `[archon-e2e:${args.sessionId}] Small smoke issue`,
+    title: `[archon-test:${args.sessionId}] Small smoke issue`,
     body: [
       ...header,
       'Goal: prove the end-to-end loop with a bounded documentation artifact.',
@@ -600,7 +600,7 @@ function buildIssueContent(args: LiveArgs): { title: string; body: string } {
 }
 
 function buildSelfMergeIssueBody(input: { args: LiveArgs; role: string }): string {
-  const artifactPath = `archon-e2e/${input.args.sessionId}-ISSUE_NUMBER.md`;
+  const artifactPath = `archon-test/${input.args.sessionId}-ISSUE_NUMBER.md`;
   return [
     'This disposable issue was created by the Archon harness self-merge live E2E runner.',
     '',
@@ -638,7 +638,7 @@ function buildVideoRecordingIssueBody(args: LiveArgs): string {
     '- Verify at least one visible outcome that proves the happy path succeeded.',
     '',
     'Acceptance criteria:',
-    '- Record the UI test with Playwright video recording, convert it to MP4, and save the MP4 as a scoped archon-e2e artifact.',
+    '- Record the UI test with Playwright video recording, convert it to MP4, and save the MP4 as a scoped archon-test artifact.',
     '- Include a concise summary of the app path tested, commands used, assertion made, and recording location.',
     '- Push the scoped recording artifact branch without opening a PR.',
     '- Comment on this initial issue with the GitHub-hosted raw MP4 link.',

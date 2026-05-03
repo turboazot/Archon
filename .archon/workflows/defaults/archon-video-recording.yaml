@@ -1,6 +1,6 @@
-name: archon-e2e-video-recording
+name: archon-video-recording
 description: |
-  Use when: Running the Archon harness live E2E test for UI video recording.
+  Use when: Running the Archon harness live test for UI video recording.
   Does: Uses an agent to infer and run the requested UI test with Playwright or Remotion,
         publishes the recording artifact branch, and comments a GitHub-hosted recording link on the initial issue.
   NOT for: Real application QA, broad UI validation, production changes, or Remotion generation.
@@ -19,26 +19,44 @@ nodes:
       EOF
       )
 
-      SESSION=$(printf '%s\n' "$REQUEST" | grep -oE '\[archon-e2e:[^]]+\]' | head -1 | sed -E 's/^\[archon-e2e:([^]]+)\]$/\1/')
-      ISSUE_NUM=$(printf '%s\n' "$REQUEST" | grep -oE 'Issue: #[0-9]+' | head -1 | grep -oE '[0-9]+')
-      BRANCH=$(printf '%s\n' "$REQUEST" | grep -oE 'Use branch: [^[:space:]]+' | head -1 | sed -E 's/^Use branch: //')
+      SESSION=$(printf '%s\n' "$REQUEST" | grep -oE '\[archon-test:[^]]+\]' | head -1 | sed -E 's/^\[archon-test:([^]]+)\]$/\1/' || true)
+      CONTEXT_JSON=$(printf '%s\n' "$REQUEST" | sed -nE 's/^ARCHON_BACKLOG_CONTEXT_JSON: (.+)$/\1/p' | head -1)
+      ISSUE_NUM=""
+      BRANCH=""
+
+      if [ -n "$CONTEXT_JSON" ]; then
+        ISSUE_NUM=$(printf '%s' "$CONTEXT_JSON" | jq -r '.issueNumber // empty')
+        BRANCH=$(printf '%s' "$CONTEXT_JSON" | jq -r '.branch // empty')
+      fi
+
+      if [ -z "$ISSUE_NUM" ]; then
+        ISSUE_NUM=$(printf '%s\n' "$REQUEST" | grep -oE '(Fix issue|Issue:)[[:space:]]*#[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+      fi
+
+      if [ -z "$BRANCH" ]; then
+        BRANCH=$(printf '%s\n' "$REQUEST" | grep -oE 'Use branch: [^[:space:]]+' | head -1 | sed -E 's/^Use branch: //' || true)
+      fi
+
+      if [ -z "$SESSION" ] && [ -n "$ISSUE_NUM" ]; then
+        SESSION="issue-${ISSUE_NUM}"
+      fi
 
       if [ -z "$SESSION" ] || [ -z "$ISSUE_NUM" ] || [ -z "$BRANCH" ]; then
-        echo "Failed to parse required E2E fields" >&2
+        echo "Failed to parse required test fields" >&2
         echo "SESSION=$SESSION ISSUE_NUM=$ISSUE_NUM BRANCH=$BRANCH" >&2
         exit 1
       fi
 
       case "$BRANCH" in
-        archon-e2e/*) ;;
+        archon-test/*|archon/*) ;;
         *)
-          echo "Refusing non-E2E branch: $BRANCH" >&2
+          echo "Refusing non-test branch: $BRANCH" >&2
           exit 1
           ;;
       esac
 
-      VIDEO_FILE="archon-e2e/${SESSION}-${ISSUE_NUM}-ui-recording.mp4"
-      SUMMARY_FILE="archon-e2e/${SESSION}-${ISSUE_NUM}-ui-recording.md"
+      VIDEO_FILE="archon-test/${SESSION}-${ISSUE_NUM}-ui-recording.mp4"
+      SUMMARY_FILE="archon-test/${SESSION}-${ISSUE_NUM}-ui-recording.md"
       RUN_DIR="$ARTIFACTS_DIR/playwright-recording"
       mkdir -p "$RUN_DIR"
       {
@@ -48,14 +66,14 @@ nodes:
         echo "VIDEO_FILE=$VIDEO_FILE"
         echo "SUMMARY_FILE=$SUMMARY_FILE"
         echo "RUN_DIR=$RUN_DIR"
-      } > "$ARTIFACTS_DIR/e2e.env"
+      } > "$ARTIFACTS_DIR/test.env"
 
-      echo "Prepared video recording E2E for issue #$ISSUE_NUM on $BRANCH"
+      echo "Prepared video recording test for issue #$ISSUE_NUM on $BRANCH"
 
   - id: record-ui
     depends_on: [prepare]
     prompt: |
-      You are running an Archon live E2E workflow whose job is to create a short UI
+      You are running an Archon live test workflow whose job is to create a short UI
       test recording and report the recording artifact back to the originating GitHub issue.
 
       ## Workflow request
@@ -79,7 +97,7 @@ nodes:
       Read the context instead of following a canned script:
 
       1. Read `AGENTS.md` if present. Only fall back to `CLAUDE.md` when there is no `AGENTS.md`.
-      2. Read `$ARTIFACTS_DIR/e2e.env` to get `ISSUE_NUM`, `SESSION`, and `RUN_DIR`.
+      2. Read `$ARTIFACTS_DIR/test.env` to get `ISSUE_NUM`, `SESSION`, and `RUN_DIR`.
       3. Use `gh issue view "$ISSUE_NUM" --json title,body,comments,labels` to read the issue.
       4. Infer the UI scenario from the issue body or comments. Prefer explicit sections like
          "UI test description", "Acceptance criteria", "Steps", or similar.
@@ -124,7 +142,7 @@ nodes:
     depends_on: [record-ui]
     bash: |
       set -euo pipefail
-      . "$ARTIFACTS_DIR/e2e.env"
+      . "$ARTIFACTS_DIR/test.env"
 
       BASE="${BASE_BRANCH:-main}"
       git fetch origin "$BASE" --quiet
@@ -165,10 +183,10 @@ nodes:
       } > "$ARTIFACTS_DIR/published.env"
 
       git add "$VIDEO_FILE" "$SUMMARY_FILE"
-      git commit -m "test: add Archon E2E UI recording artifact"
+      git commit -m "test: add Archon test UI recording artifact"
 
       {
-        echo "# E2E Video Recording"
+        echo "# Test Video Recording"
         echo
         echo "- Issue: #$ISSUE_NUM"
         echo "- Branch: $BRANCH"
@@ -181,7 +199,7 @@ nodes:
     depends_on: [publish-artifact]
     bash: |
       set -euo pipefail
-      . "$ARTIFACTS_DIR/e2e.env"
+      . "$ARTIFACTS_DIR/test.env"
       . "$ARTIFACTS_DIR/published.env"
 
       git push -u origin "$BRANCH"
@@ -191,7 +209,7 @@ nodes:
       RAW_SUMMARY_URL="https://raw.githubusercontent.com/${REPO}/refs/heads/${BRANCH}/${SUMMARY_FILE}"
 
       COMMENT=$(cat <<EOF
-      Archon E2E UI recording completed.
+      Archon test UI recording completed.
 
       - Recording: ${RAW_VIDEO_URL}
       - Recording size: ${VIDEO_SIZE} bytes

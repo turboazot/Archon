@@ -61,26 +61,37 @@ Run the full scratch ecommerce auto-merge smoke. `ARCHON_BASE_URL` defaults to
 bun --filter @archon/backlog-orchestrator smoke:live -- --project X15 --scenario ecommerce-app-auto-merge
 ```
 
-To only seed the ecommerce E2E GitHub issues and let an already-running backlog
+To only seed the ecommerce test GitHub issues and let an already-running backlog
 orchestrator pick them up:
 
 ```bash
 bun --filter @archon/backlog-orchestrator smoke:create-ecommerce-issues
 ```
 
+The helper creates plain issue titles by default, without an `[archon-test:...]`
+prefix. Add `--title-prefix "[archon-test:my-session] "` only when you want that
+extra title marker.
+
+The helper only applies orchestration labels by default. Ecommerce implementation
+issues get `archon:ready`, `archon-workflow:fix-issue-simple`, and
+`archon:auto-merge` unless `--no-auto-merge` is passed. The video recording
+issue gets `archon:ready` and `archon-workflow:video-recording`.
+
 Recommended preflight before starting:
 
 ```bash
 curl -fsS http://localhost:3090/health
-gh issue list -R podlodka-ai-club/X15 --label archon-e2e --state open
-gh pr list -R podlodka-ai-club/X15 --state open --head 'archon-e2e/*'
+gh issue list -R podlodka-ai-club/X15 --label archon-test --state open
+gh pr list -R podlodka-ai-club/X15 --state open --head 'archon-test/*'
 git -C /home/ubuntu/.archon/workspaces/podlodka-ai-club/X15/source status --short
 ```
 
-A passing scratch run creates three disposable issues and three PRs:
+A passing scratch run creates four disposable issues, three PRs, and one video
+artifact branch:
 
 - skeleton issue and PR merge first
 - catalog and cart/checkout unblock together
+- video recording waits for catalog and cart/checkout
 - one of the two follow-up PRs may conflict after the other merges
 - `archon-resolve-conflicts` should resolve the conflict, then its
   `merge-if-auto` node should merge the PR when the issue has
@@ -102,7 +113,7 @@ SESSION_ID=2026-05-01T18-13-44-278Z
 jq '{sessionId, scenario, completedEarly}' \
   "packages/backlog-orchestrator/e2e/results/${SESSION_ID}/result.json"
 
-gh issue list -R podlodka-ai-club/X15 --label archon-e2e --state all --limit 20 \
+gh issue list -R podlodka-ai-club/X15 --label archon-test --state all --limit 20 \
   --json number,title,state,closedAt,labels \
   | jq -r --arg session "$SESSION_ID" \
     '.[] | select(.title|contains($session)) | "#\(.number) \(.state) labels=[\([.labels[].name]|join(","))] \(.title)"'

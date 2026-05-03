@@ -634,15 +634,15 @@ export class WorktreeProvider implements IIsolationProvider {
       return this.buildAdoptedEnvironment(worktreePath, branchName, request);
     }
 
-    // For PRs: also check if skill created a worktree with the PR's branch name
-    if (isPRIsolationRequest(request)) {
+    const adoptableBranchName = this.getAdoptableBranchName(request, branchName);
+    if (adoptableBranchName) {
       const existingByBranch = await findWorktreeByBranch(
         request.canonicalRepoPath,
-        request.prBranch
+        adoptableBranchName
       );
       if (existingByBranch) {
         // Same cross-clone guard as the primary adoption path above — a
-        // worktree matching the PR branch might still belong to a different
+        // worktree matching the branch might still belong to a different
         // clone of the same remote.
         try {
           await verifyWorktreeOwnership(existingByBranch, request.canonicalRepoPath);
@@ -650,7 +650,7 @@ export class WorktreeProvider implements IIsolationProvider {
           getLog().warn(
             {
               worktreePath: existingByBranch,
-              branchName: request.prBranch,
+              branchName: adoptableBranchName,
               codebaseId: request.codebaseId,
               canonicalRepoPath: request.canonicalRepoPath,
               err: (err as Error).message,
@@ -661,14 +661,34 @@ export class WorktreeProvider implements IIsolationProvider {
         }
 
         getLog().info(
-          { worktreePath: existingByBranch, branchName: request.prBranch },
+          { worktreePath: existingByBranch, branchName: adoptableBranchName },
           'worktree_adopted'
         );
-        return this.buildAdoptedEnvironment(existingByBranch, request.prBranch, request, 'branch');
+        return this.buildAdoptedEnvironment(
+          existingByBranch,
+          adoptableBranchName,
+          request,
+          'branch'
+        );
       }
     }
 
     return null;
+  }
+
+  private getAdoptableBranchName(
+    request: IsolationRequest,
+    branchName: string
+  ): ReturnType<typeof toBranchName> | undefined {
+    if (request.workflowType === 'task' && request.fromBranch) {
+      return undefined;
+    }
+
+    if (isPRIsolationRequest(request)) {
+      return request.prBranch;
+    }
+
+    return toBranchName(branchName);
   }
 
   private buildAdoptedEnvironment(

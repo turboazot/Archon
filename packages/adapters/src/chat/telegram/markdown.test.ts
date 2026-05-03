@@ -51,10 +51,21 @@ describe('telegram-markdown', () => {
     });
 
     describe('links', () => {
-      test('preserves markdown links', () => {
+      test('flattens markdown links to avoid brittle Telegram entities', () => {
         const result = convertToTelegramMarkdown('[Click here](https://example.com)');
-        expect(result).toContain('[Click here]');
+        expect(result).toContain('Click here');
         expect(result).toContain('https://example.com');
+        expect(result).not.toContain('](');
+      });
+
+      test('flattens URL-as-label links used in PR summaries', () => {
+        const result = convertToTelegramMarkdown(
+          'Draft PR: [https://github.com/turboazot/archon-products-api/pull/1](https://github.com/turboazot/archon-products-api/pull/1)'
+        );
+
+        expect(result).toContain('Draft PR:');
+        expect(result).toContain('https://github\\.com/turboazot/archon\\-products\\-api/pull/1');
+        expect(result).not.toContain('](');
       });
     });
 

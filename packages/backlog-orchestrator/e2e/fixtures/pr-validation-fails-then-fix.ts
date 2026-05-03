@@ -8,7 +8,7 @@ export const prValidationFailsThenFixFixture: HarnessE2EFixture = {
     makeIssue({
       number: 2,
       title: 'Archon E2E validation retry',
-      labels: ['archon:ready', 'archon-workflow:fix-issue', 'area:e2e'],
+      labels: ['archon:ready', 'archon-workflow:fix-issue', 'area:test'],
     }),
   ],
   actionsAfterCycle: {
@@ -24,7 +24,7 @@ export const prValidationFailsThenFixFixture: HarnessE2EFixture = {
               number: 202,
               issueNumber: 2,
               branch: run.branch,
-              labels: ['area:e2e'],
+              labels: ['area:test'],
               changedFiles: ['src/retry.ts'],
               checks: 'failing',
               review: 'none',

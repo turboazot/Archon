@@ -34,19 +34,32 @@ export function convertToTelegramMarkdown(markdown: string): string {
   }
 
   try {
+    const linkSafeMarkdown = flattenMarkdownLinks(markdown);
     // 'escape' strategy: escape unsupported tags rather than remove them
-    let result = telegramifyMarkdown(markdown, 'escape');
+    let result = telegramifyMarkdown(linkSafeMarkdown, 'escape');
 
     // Post-processing: Fix remaining **bold** patterns that weren't converted
     // The library sometimes leaves **text** when inside headers like ### **text**
     // MarkdownV2 requires single asterisk *bold* not double **bold**
     result = fixRemainingDoubleBold(result);
+    result = flattenMarkdownLinks(result);
 
     return result;
   } catch (error) {
     getLog().warn({ err: error }, 'telegram.markdown_conversion_failed');
     return escapeMarkdownV2(markdown);
   }
+}
+
+/**
+ * Telegram MarkdownV2 links are brittle when the link label itself contains
+ * escaped URL punctuation. Plain text URLs are more reliable and Telegram still
+ * auto-detects them in most clients.
+ */
+function flattenMarkdownLinks(text: string): string {
+  return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, url: string) => {
+    return label === url ? url : `${label} (${url})`;
+  });
 }
 
 /**

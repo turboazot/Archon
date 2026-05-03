@@ -12,6 +12,7 @@ import type {
   HarnessOrchestratorConfig,
   HarnessOrchestratorPorts,
   HarnessPullRequest,
+  HarnessWorkflowRun,
   RepositoryInfo,
   OrchestratorStore,
   StatusReport,
@@ -76,86 +77,184 @@ export class HarnessOrchestrator {
     const runs = await this.store.listRuns(this.config.repo);
     for (const run of runs) {
       if (TERMINAL_RUN_STATUSES.has(run.status)) continue;
-      if (
-        run.status !== 'running' &&
-        run.status !== 'fix_running' &&
-        run.status !== 'conflict_running'
-      )
-        continue;
+      if (!ACTIVE_RUN_STATUSES.has(run.status)) continue;
 
-      const workflowRun = await this.archon.getWorkflowRun(run.workflowRunId);
-
-      const issue =
-        issues.find(candidate => candidate.number === run.issueNumber) ??
-        (await this.github.getIssue(this.config.repo, run.issueNumber));
-      if (!issue) continue;
-
-      const pr = await this.github.findPullRequestByBranch(this.config.repo, run.branch);
-      if (pr) {
-        const shouldAdoptOpenPr =
-          run.prNumber === undefined ||
-          (run.status === 'running' && workflowRun?.state === 'running');
-        if (shouldAdoptOpenPr) {
-          await this.transitionRun(run, {
-            prNumber: pr.number,
-            status: 'pr_open',
-            changedFiles: pr.changedFiles,
-            lastError:
-              workflowRun && (workflowRun.state === 'failed' || workflowRun.state === 'cancelled')
-                ? (workflowRun.error ?? `Workflow ${workflowRun.state}`)
-                : run.lastError,
-          });
-          await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.prOpen);
-          await this.commentOnce(
-            run,
-            issue.number,
-            'pr-opened',
-            `PR #${pr.number} is open for ${run.branch}.`
-          );
-        }
-        continue;
-      }
-
-      if (!workflowRun || workflowRun.state === 'running') continue;
-
-      if (workflowRun.state === 'failed' || workflowRun.state === 'cancelled') {
-        await this.markRunFailed(run, issue, workflowRun.error ?? `Workflow ${workflowRun.state}`);
-        continue;
-      }
-
-      if (this.config.workflowLabelsCompletingWithoutPr.includes(run.workflowLabel)) {
-        await this.transitionRun(run, {
-          status: 'done',
-        });
-        await this.github.removeIssueLabel(
-          this.config.repo,
-          issue.number,
-          LIFECYCLE_LABELS.inProgress
-        );
-        await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.done);
-        await this.commentOnce(
-          run,
-          issue.number,
-          'completed-without-pr',
-          `Workflow completed without a PR for ${run.branch}.`
-        );
-        continue;
-      }
-
-      await this.markRunFailed(
-        run,
-        issue,
-        `Workflow completed but no PR was found for ${run.branch}`
-      );
-      await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.blocked);
-      await this.commentOnce(
-        run,
-        issue.number,
-        'missing-pr',
-        `Workflow completed, but no PR was found for branch ${run.branch}.`
-      );
-      continue;
+      await this.syncActiveWorkflowRun(run, issues);
     }
+  }
+
+  private async syncActiveWorkflowRun(
+    run: StoredOrchestratorRun,
+    issues: HarnessIssue[]
+  ): Promise<void> {
+    const issue = await this.findIssue(issues, run.issueNumber);
+    if (!issue) return;
+
+    if (issue.state === 'closed') {
+      await this.abandonRunForClosedIssue(run, issue);
+      return;
+    }
+
+    const workflowRun = await this.archon.getWorkflowRun(run.workflowRunId);
+    const pr = await this.github.findPullRequestByBranch(this.config.repo, run.branch);
+
+    if (run.status === 'conflict_running') {
+      await this.syncConflictWorkflowRun(run, issue, workflowRun, pr);
+      return;
+    }
+
+    if (pr) {
+      await this.syncImplementationWorkflowWithPr(run, issue, workflowRun, pr);
+      return;
+    }
+
+    await this.syncWorkflowWithoutPr(run, issue, workflowRun);
+  }
+
+  private async syncConflictWorkflowRun(
+    run: StoredOrchestratorRun,
+    issue: HarnessIssue,
+    workflowRun: HarnessWorkflowRun | undefined,
+    pr: HarnessPullRequest | undefined
+  ): Promise<void> {
+    if (workflowRun?.state === 'running') return;
+
+    if (!workflowRun || workflowRun.state === 'failed' || workflowRun.state === 'cancelled') {
+      const lastError = this.workflowTerminalError(workflowRun, 'Conflict workflow');
+      if (pr?.mergeability === 'conflicting') {
+        await this.scheduleConflictWorkflow(run, issue, pr, lastError);
+      } else {
+        await this.markRunFailed(run, issue, lastError);
+      }
+      return;
+    }
+
+    if (!pr) return;
+
+    await this.transitionRun(run, {
+      prNumber: pr.number,
+      status: 'pr_open',
+      changedFiles: pr.changedFiles,
+    });
+  }
+
+  private async syncImplementationWorkflowWithPr(
+    run: StoredOrchestratorRun,
+    issue: HarnessIssue,
+    workflowRun: HarnessWorkflowRun | undefined,
+    pr: HarnessPullRequest
+  ): Promise<void> {
+    if (!workflowRun || workflowRun.state === 'running') return;
+
+    const shouldAdoptOpenPr =
+      run.prNumber === undefined || run.status === 'running' || run.status === 'fix_running';
+    if (!shouldAdoptOpenPr) return;
+
+    await this.transitionRun(run, {
+      prNumber: pr.number,
+      status: 'pr_open',
+      changedFiles: pr.changedFiles,
+      lastError: this.isTerminalWorkflowFailure(workflowRun)
+        ? this.workflowTerminalError(workflowRun)
+        : run.lastError,
+    });
+    await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.prOpen);
+    await this.commentOnce(
+      run,
+      issue.number,
+      'pr-opened',
+      `PR #${pr.number} is open for ${run.branch}.`
+    );
+  }
+
+  private async syncWorkflowWithoutPr(
+    run: StoredOrchestratorRun,
+    issue: HarnessIssue,
+    workflowRun: HarnessWorkflowRun | undefined
+  ): Promise<void> {
+    if (!workflowRun || workflowRun.state === 'running') return;
+
+    if (this.isTerminalWorkflowFailure(workflowRun)) {
+      await this.markRunFailed(run, issue, this.workflowTerminalError(workflowRun));
+      return;
+    }
+
+    if (this.config.workflowLabelsCompletingWithoutPr.includes(run.workflowLabel)) {
+      await this.markRunDoneWithoutPr(run, issue);
+      return;
+    }
+
+    await this.markRunFailed(
+      run,
+      issue,
+      `Workflow completed but no PR was found for ${run.branch}`
+    );
+    await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.blocked);
+    await this.commentOnce(
+      run,
+      issue.number,
+      'missing-pr',
+      `Workflow completed, but no PR was found for branch ${run.branch}.`
+    );
+  }
+
+  private async markRunDoneWithoutPr(
+    run: StoredOrchestratorRun,
+    issue: HarnessIssue
+  ): Promise<void> {
+    await this.transitionRun(run, {
+      status: 'done',
+    });
+    await this.github.removeIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.inProgress);
+    await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.done);
+    await this.commentOnce(
+      run,
+      issue.number,
+      'completed-without-pr',
+      `Workflow completed without a PR for ${run.branch}.`
+    );
+  }
+
+  private isTerminalWorkflowFailure(workflowRun: HarnessWorkflowRun): boolean {
+    return workflowRun.state === 'failed' || workflowRun.state === 'cancelled';
+  }
+
+  private workflowTerminalError(
+    workflowRun: HarnessWorkflowRun | undefined,
+    missingPrefix = 'Workflow'
+  ): string {
+    if (!workflowRun) return `${missingPrefix} record missing`;
+    return workflowRun.error ?? `${missingPrefix} ${workflowRun.state}`;
+  }
+
+  private async findIssue(
+    issues: HarnessIssue[],
+    issueNumber: number
+  ): Promise<HarnessIssue | undefined> {
+    return (
+      issues.find(candidate => candidate.number === issueNumber) ??
+      (await this.github.getIssue(this.config.repo, issueNumber))
+    );
+  }
+
+  private async abandonRunForClosedIssue(
+    run: StoredOrchestratorRun,
+    issue: HarnessIssue
+  ): Promise<void> {
+    await this.transitionRun(run, {
+      status: 'abandoned',
+      lastError: `Issue #${issue.number} is closed`,
+    });
+    await this.github.removeIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.ready);
+    await this.github.removeIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.inProgress);
+    await this.github.removeIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.blocked);
+    await this.github.removeIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.prOpen);
+    await this.github.removeIssueLabel(
+      this.config.repo,
+      issue.number,
+      LIFECYCLE_LABELS.readyForReview
+    );
+    await this.github.removeIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.needsFix);
   }
 
   private async syncPullRequests(
@@ -168,88 +267,114 @@ export class HarnessOrchestrator {
     for (const run of runs) {
       if (!run.prNumber || TERMINAL_RUN_STATUSES.has(run.status)) continue;
 
-      const issue =
-        issues.find(candidate => candidate.number === run.issueNumber) ??
-        (await this.github.getIssue(this.config.repo, run.issueNumber));
+      const issue = await this.findIssue(issues, run.issueNumber);
       const pr = prs.find(candidate => candidate.number === run.prNumber);
       if (!issue || !pr) continue;
 
-      if (!this.isPrLinkedToIssue(pr, issue.number)) {
-        await this.transitionRun(run, {
-          status: 'blocked',
-          lastError: `PR #${pr.number} must contain exactly one closing reference for issue #${issue.number}`,
-        });
-        await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.blocked);
-        await this.commentOnce(
-          run,
-          issue.number,
-          'pr-link-invalid',
-          `PR #${pr.number} is not safely linked to this issue. Add exactly one closing keyword such as \`Fixes #${issue.number}\` to the PR body.`
-        );
-        continue;
-      }
+      await this.syncTrackedPullRequest(run, issue, pr, report, repositoryInfo);
+    }
+  }
 
-      if (pr.state === 'merged') {
-        await this.transitionRun(run, {
-          status: 'done',
-          changedFiles: pr.changedFiles,
-        });
-        await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.done);
-        await this.github.removeIssueLabel(
-          this.config.repo,
-          issue.number,
-          LIFECYCLE_LABELS.inProgress
-        );
-        await this.commentOnce(run, issue.number, 'merged', `PR #${pr.number} was merged.`);
-        continue;
-      }
+  private async syncTrackedPullRequest(
+    run: StoredOrchestratorRun,
+    issue: HarnessIssue,
+    pr: HarnessPullRequest,
+    report: StatusReport,
+    repositoryInfo: RepositoryInfo
+  ): Promise<void> {
+    if (!this.isPrLinkedToIssue(pr, issue.number)) {
+      await this.blockInvalidPrLink(run, issue, pr);
+      return;
+    }
 
-      if (pr.state === 'closed') {
-        await this.markRunFailed(run, issue, `PR #${pr.number} closed without merge`);
-        continue;
-      }
+    if (pr.state === 'merged') {
+      await this.markPrMerged(run, issue, pr);
+      return;
+    }
 
-      if (pr.mergeability === 'conflicting') {
-        await this.handlePrConflict(run, issue, pr);
-        continue;
-      }
+    if (pr.state === 'closed') {
+      await this.markRunFailed(run, issue, `PR #${pr.number} closed without merge`);
+      return;
+    }
 
-      if (pr.checks === 'failing' || pr.review === 'changes_requested') {
-        await this.handlePrNeedsFix(run, issue, pr);
-        continue;
-      }
+    if (pr.mergeability === 'conflicting') {
+      await this.handlePrConflict(run, issue, pr);
+      return;
+    }
 
-      if (pr.checks === 'passing') {
-        await this.transitionRun(run, {
-          status: 'ready_for_review',
-          changedFiles: pr.changedFiles,
-        });
-        await this.github.removeIssueLabel(
-          this.config.repo,
-          issue.number,
-          LIFECYCLE_LABELS.inProgress
-        );
-        await this.github.addIssueLabel(
-          this.config.repo,
-          issue.number,
-          LIFECYCLE_LABELS.readyForReview
-        );
-        await this.commentOnce(
-          run,
-          issue.number,
-          'validated',
-          `PR #${pr.number} passed validation and is ready for review.`
-        );
+    if (pr.checks === 'failing' || pr.review === 'changes_requested') {
+      await this.handlePrNeedsFix(run, issue, pr);
+      return;
+    }
 
-        if (this.isAutoMergeCandidate(issue, pr, run, repositoryInfo)) {
-          report.autoMergeCandidates.push(pr);
-          if (this.config.autoMergeEnabled) {
-            await this.github.mergePullRequest(this.config.repo, pr.number);
-          }
-        } else {
-          report.readyForHumanReview.push(pr);
-        }
+    if (pr.checks === 'passing') {
+      await this.markPrReady(run, issue, pr, report, repositoryInfo);
+    }
+  }
+
+  private async blockInvalidPrLink(
+    run: StoredOrchestratorRun,
+    issue: HarnessIssue,
+    pr: HarnessPullRequest
+  ): Promise<void> {
+    await this.transitionRun(run, {
+      status: 'blocked',
+      lastError: `PR #${pr.number} must contain exactly one closing reference for issue #${issue.number}`,
+    });
+    await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.blocked);
+    await this.commentOnce(
+      run,
+      issue.number,
+      'pr-link-invalid',
+      `PR #${pr.number} is not safely linked to this issue. Add exactly one closing keyword such as \`Fixes #${issue.number}\` to the PR body.`
+    );
+  }
+
+  private async markPrMerged(
+    run: StoredOrchestratorRun,
+    issue: HarnessIssue,
+    pr: HarnessPullRequest
+  ): Promise<void> {
+    await this.transitionRun(run, {
+      status: 'done',
+      changedFiles: pr.changedFiles,
+    });
+    await this.github.addIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.done);
+    await this.github.removeIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.inProgress);
+    await this.commentOnce(run, issue.number, 'merged', `PR #${pr.number} was merged.`);
+  }
+
+  private async markPrReady(
+    run: StoredOrchestratorRun,
+    issue: HarnessIssue,
+    pr: HarnessPullRequest,
+    report: StatusReport,
+    repositoryInfo: RepositoryInfo
+  ): Promise<void> {
+    await this.transitionRun(run, {
+      status: 'ready_for_review',
+      changedFiles: pr.changedFiles,
+    });
+    await this.github.removeIssueLabel(this.config.repo, issue.number, LIFECYCLE_LABELS.inProgress);
+    await this.github.addIssueLabel(
+      this.config.repo,
+      issue.number,
+      LIFECYCLE_LABELS.readyForReview
+    );
+    await this.commentOnce(
+      run,
+      issue.number,
+      'validated',
+      `PR #${pr.number} passed validation and is ready for review.`
+    );
+
+    if (this.isAutoMergeCandidate(issue, pr, run, repositoryInfo)) {
+      report.autoMergeCandidates.push(pr);
+      if (this.config.autoMergeEnabled) {
+        await this.github.mergePullRequest(this.config.repo, pr.number);
       }
+    } else {
+      report.readyForHumanReview.push(pr);
     }
   }
 
@@ -312,6 +437,15 @@ export class HarnessOrchestrator {
       return;
     }
 
+    await this.scheduleConflictWorkflow(run, issue, pr, `PR #${pr.number} has merge conflicts`);
+  }
+
+  private async scheduleConflictWorkflow(
+    run: StoredOrchestratorRun,
+    issue: HarnessIssue,
+    pr: HarnessPullRequest,
+    lastError: string
+  ): Promise<void> {
     if (run.fixAttempts >= this.config.maxFixAttempts) {
       await this.transitionRun(run, {
         status: 'needs_fix',
@@ -339,7 +473,7 @@ export class HarnessOrchestrator {
       workflowRunId: conflictWorkflow.id,
       status: 'conflict_running',
       fixAttempts: run.fixAttempts + 1,
-      lastError: `PR #${pr.number} has merge conflicts`,
+      lastError,
     });
     await this.commentOnce(
       run,
@@ -369,7 +503,9 @@ export class HarnessOrchestrator {
     })) {
       if (result.blockedReason) {
         report.blockedIssues.push({ issue: result.issue, reason: result.blockedReason });
-        await this.markIssueBlocked(result.issue, result.blockedReason);
+        if (result.shouldMarkBlocked) {
+          await this.markIssueBlocked(result.issue, result.blockedReason);
+        }
         continue;
       }
 

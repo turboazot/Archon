@@ -1,0 +1,86 @@
+name: archon-small-pr-review
+description: |
+  Use when: User wants a small, fast PR review.
+  Triggers: "small PR review", "quick PR review", "review PR quickly", "light PR review".
+  Does: Reads PR metadata and diff -> produces a concise review verdict with key findings.
+  NOT for: Comprehensive review, auto-fixing, CI validation, or deep multi-agent analysis.
+
+provider: codex
+model: gpt-5.5
+modelReasoningEffort: low
+
+nodes:
+  - id: collect-pr
+    bash: |
+      set -euo pipefail
+
+      PR_NUMBER=""
+
+      if [ -n "${ARGUMENTS:-}" ]; then
+        PR_NUMBER=$(printf '%s\n' "$ARGUMENTS" | grep -oE '(PR|pr|pull request)?[[:space:]]*#?[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+      fi
+
+      if [ -z "$PR_NUMBER" ]; then
+        PR_NUMBER=$(gh pr view --json number -q '.number' 2>/dev/null || true)
+      fi
+
+      if [ -z "$PR_NUMBER" ]; then
+        echo "ERROR: No PR number found. Run from a PR thread or pass PR #123."
+        exit 1
+      fi
+
+      echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
+
+      {
+        echo "# Small PR Review Context"
+        echo
+        echo "## PR"
+        gh pr view "$PR_NUMBER" --json number,title,url,headRefName,baseRefName,state,isDraft,additions,deletions,changedFiles,files --jq '
+          "- Number: #\(.number)",
+          "- Title: \(.title)",
+          "- URL: \(.url)",
+          "- Branch: `\(.headRefName)` -> `\(.baseRefName)`",
+          "- State: \(.state)",
+          "- Draft: \(.isDraft)",
+          "- Size: +\(.additions) -\(.deletions), \(.changedFiles) files",
+          "",
+          "## Changed Files",
+          (.files[] | "- `\(.path)` (+\(.additions) -\(.deletions))")
+        '
+        echo
+        echo "## Diff"
+        gh pr diff "$PR_NUMBER" --patch --color=never | sed -n '1,1200p'
+      } > "$ARTIFACTS_DIR/small-pr-context.md"
+
+      cat "$ARTIFACTS_DIR/small-pr-context.md"
+
+  - id: review
+    depends_on: [collect-pr]
+    allowed_tools: []
+    prompt: |
+      You are doing a small pull request review.
+
+      Review only the context below. Do not ask follow-up questions. Do not claim you ran tests.
+      Keep the result concise and useful for a PR comment.
+
+      ## Context
+
+      $collect-pr.output
+
+      ## Output Format
+
+      Write exactly this structure:
+
+      ## Small PR Review
+
+      **Verdict**: APPROVE | REQUEST_CHANGES | NEEDS_LOOK
+
+      **Summary**
+      2-3 bullets about what the PR changes and whether it looks safe.
+
+      **Findings**
+      - If you see a real issue, list severity, file, and why it matters.
+      - If no real issue is visible, write: "No blocking findings from this quick review."
+
+      **Suggested Checks**
+      1-3 concrete commands or manual checks the author should run before merge.

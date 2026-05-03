@@ -105,6 +105,29 @@ function findCodebaseByName(
   });
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function mentionsCodebase(message: string, codebase: Codebase): boolean {
+  const candidates = new Set<string>([codebase.name]);
+  const lastSegment = codebase.name.split('/').at(-1);
+  if (lastSegment) candidates.add(lastSegment);
+
+  return [...candidates].some(candidate => {
+    const pattern = new RegExp(`(^|[^a-z0-9_-])${escapeRegExp(candidate)}([^a-z0-9_-]|$)`, 'i');
+    return pattern.test(message);
+  });
+}
+
+function findMentionedCodebase(
+  codebases: readonly Codebase[],
+  message: string
+): Codebase | undefined {
+  const matches = codebases.filter(codebase => mentionsCodebase(message, codebase));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 /**
  * Parse orchestrator commands from AI response text.
  * Scans for /invoke-workflow and /register-project patterns.
@@ -221,7 +244,8 @@ async function dispatchOrchestratorWorkflow(
   codebase: Codebase,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  options?: { allowResume?: boolean }
 ): Promise<void> {
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {
@@ -272,10 +296,10 @@ async function dispatchOrchestratorWorkflow(
     // Check for a resumable run from a prior dispatch (e.g. approved approval gate).
     // A new background dispatch would create a new worker conversation and never find
     // the prior run's worktree. Execute in foreground to reuse the original working path.
-    const resumableRun = await workflowDb.findResumableRunByParentConversation(
-      workflow.name,
-      conversation.id
-    );
+    const resumableRun =
+      options?.allowResume === true
+        ? await workflowDb.findResumableRunByParentConversation(workflow.name, conversation.id)
+        : null;
     if (resumableRun?.working_path) {
       getLog().info(
         {
@@ -665,7 +689,8 @@ export async function handleMessage(
             codebase,
             workflow,
             pausedRun.user_message,
-            isolationHints
+            isolationHints,
+            { allowResume: true }
           );
           getLog().info(
             { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
@@ -737,6 +762,23 @@ export async function handleMessage(
             result.workflow.args ?? message,
             isolationHints
           );
+        } else if (result.success && command === 'workflow') {
+          const { args } = commandHandler.parseCommand(message);
+          const workflowAction = args[0];
+          const workflowRunId = args[1];
+          if (
+            (workflowAction === 'approve' || workflowAction === 'reject') &&
+            typeof workflowRunId === 'string' &&
+            workflowRunId.length > 0
+          ) {
+            await resumeApprovedWorkflowCommand(
+              platform,
+              conversationId,
+              conversation,
+              workflowRunId,
+              isolationHints
+            );
+          }
         }
         return;
       }
@@ -744,6 +786,30 @@ export async function handleMessage(
 
     // 3. Load codebases, discover workflows, build prompt
     const codebases = await codebaseDb.listCodebases();
+    let projectScopeChanged = false;
+    const mentionedCodebase = findMentionedCodebase(codebases, message);
+    if (mentionedCodebase && mentionedCodebase.id !== conversation.codebase_id) {
+      await db.updateConversation(conversation.id, {
+        codebase_id: mentionedCodebase.id,
+        cwd: mentionedCodebase.default_cwd,
+        isolation_env_id: null,
+      });
+      conversation = {
+        ...conversation,
+        codebase_id: mentionedCodebase.id,
+        cwd: mentionedCodebase.default_cwd,
+        isolation_env_id: null,
+      };
+      projectScopeChanged = true;
+      getLog().info(
+        {
+          conversationId,
+          codebaseId: mentionedCodebase.id,
+          codebaseName: mentionedCodebase.name,
+        },
+        'orchestrator.explicit_project_scope_selected'
+      );
+    }
     const {
       workflows: workflowsWithSource,
       errors: workflowErrors,
@@ -826,9 +892,15 @@ export async function handleMessage(
     // 4. Update activity and get/create session
     await db.touchConversation(conversation.id);
     let session = await sessionDb.getActiveSession(conversation.id);
-    if (!session) {
+    if (projectScopeChanged) {
+      session = await sessionDb.transitionSession(conversation.id, 'isolation-changed', {
+        ai_assistant_type: conversation.ai_assistant_type,
+        codebase_id: conversation.codebase_id ?? undefined,
+      });
+    } else if (!session) {
       session = await sessionDb.transitionSession(conversation.id, 'first-message', {
         ai_assistant_type: conversation.ai_assistant_type,
+        codebase_id: conversation.codebase_id ?? undefined,
       });
     }
 
@@ -1553,5 +1625,52 @@ async function handleWorkflowRunCommand(
   await platform.sendMessage(
     conversationId,
     `Which project should this workflow run on?\n\n${projectList}\n\nReply with the project name, or use: /workflow run ${workflow.name} --project <name> "${userMessage}"`
+  );
+}
+
+async function resumeApprovedWorkflowCommand(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation,
+  runId: string,
+  isolationHints?: HandleMessageContext['isolationHints']
+): Promise<void> {
+  const run = await workflowDb.getWorkflowRun(runId);
+  if (!run) return;
+
+  const { workflows: discoveredWorkflows } = await discoverAllWorkflows(conversation);
+  const workflow = findWorkflow(
+    run.workflow_name,
+    discoveredWorkflows.map(w => w.workflow)
+  );
+  if (!workflow) {
+    await platform.sendMessage(
+      conversationId,
+      `Approval was recorded, but workflow \`${run.workflow_name}\` was not found.`
+    );
+    return;
+  }
+
+  const codebase = conversation.codebase_id
+    ? await codebaseDb.getCodebase(conversation.codebase_id)
+    : null;
+  if (!codebase) {
+    await platform.sendMessage(
+      conversationId,
+      'Approval was recorded, but no project is attached to this conversation.'
+    );
+    return;
+  }
+
+  await platform.sendMessage(conversationId, `▶️ Resuming **${workflow.name}**...`);
+  await dispatchOrchestratorWorkflow(
+    platform,
+    conversationId,
+    conversation,
+    codebase,
+    workflow,
+    run.user_message,
+    isolationHints,
+    { allowResume: true }
   );
 }

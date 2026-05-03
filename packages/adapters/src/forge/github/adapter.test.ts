@@ -224,13 +224,17 @@ describe('GitHubAdapter', () => {
     /**
      * Creates a webhook payload for issue comment events.
      */
-    function createCommentPayload(commentBody: string, commentAuthor: string | undefined): string {
+    function createCommentPayload(
+      commentBody: string,
+      commentAuthor: string | undefined,
+      action = 'created'
+    ): string {
       const comment: { body: string; user?: { login: string } } = { body: commentBody };
       if (commentAuthor !== undefined) {
         comment.user = { login: commentAuthor };
       }
       return JSON.stringify({
-        action: 'created',
+        action,
         issue: {
           number: 42,
           title: 'Test Issue',
@@ -312,6 +316,34 @@ describe('GitHubAdapter', () => {
       await adapter.handleWebhook(payload, 'mock-signature');
 
       // Marked comments should be silently dropped
+      expect(mockLockManager.acquireLock).not.toHaveBeenCalled();
+    });
+
+    test('should ignore deleted comment events so old commands are not replayed', async () => {
+      const adapter = createSelfFilterAdapter();
+      const payload = createCommentPayload(
+        '@archon /workflow run archon-small-interactive-prd',
+        'Wirasm',
+        'deleted'
+      );
+
+      await adapter.handleWebhook(payload, 'mock-signature');
+
+      expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
+      expect(mockLockManager.acquireLock).not.toHaveBeenCalled();
+    });
+
+    test('should ignore edited comment events so old commands are not replayed', async () => {
+      const adapter = createSelfFilterAdapter();
+      const payload = createCommentPayload(
+        '@archon /workflow run archon-small-interactive-prd',
+        'Wirasm',
+        'edited'
+      );
+
+      await adapter.handleWebhook(payload, 'mock-signature');
+
+      expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
       expect(mockLockManager.acquireLock).not.toHaveBeenCalled();
     });
 

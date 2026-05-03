@@ -10,6 +10,7 @@ export interface EligibilityResult {
   issue: HarnessIssue;
   workflowLabel?: string;
   blockedReason?: string;
+  shouldMarkBlocked?: boolean;
 }
 
 export interface EligibilityInput {
@@ -39,21 +40,29 @@ function evaluateIssue(issue: HarnessIssue, input: EligibilityInput): Eligibilit
 
   if (ownsIssue) return { issue };
   if (workflowLabels.length === 0) {
-    return { issue, blockedReason: 'Missing archon-workflow:* routing label' };
+    return {
+      issue,
+      blockedReason: 'Missing archon-workflow:* routing label',
+      shouldMarkBlocked: true,
+    };
   }
   if (workflowLabels.length > 1) {
-    return { issue, blockedReason: 'Ambiguous workflow routing labels' };
+    return { issue, blockedReason: 'Ambiguous workflow routing labels', shouldMarkBlocked: true };
   }
 
   const openBlockers = issue.blockedByIssueNumbers.filter(blockerNumber =>
     input.issues.some(candidate => candidate.number === blockerNumber && candidate.state === 'open')
   );
   if (openBlockers.length > 0) {
-    return { issue, blockedReason: `Blocked by open issue(s): ${openBlockers.join(', ')}` };
+    return {
+      issue,
+      blockedReason: `Blocked by open issue(s): ${openBlockers.join(', ')}`,
+      shouldMarkBlocked: false,
+    };
   }
 
   if (hasAreaConflict(issue, input.activeRuns, input.openAgentPrs, input.areaLockPolicy)) {
-    return { issue, blockedReason: 'Blocked by area lock conflict' };
+    return { issue, blockedReason: 'Blocked by area lock conflict', shouldMarkBlocked: true };
   }
 
   return { issue, workflowLabel: workflowLabels[0] };

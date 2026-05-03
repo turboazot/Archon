@@ -1,7 +1,7 @@
-name: archon-e2e-tiny-self-merge
+name: archon-tiny-self-merge
 description: |
-  Use when: Running the Archon harness live E2E smoke test with autonomous PR review and merge.
-  Does: Creates one scoped archon-e2e artifact file, opens one PR, performs a deterministic self-review, and merges when the review passes.
+  Use when: Running the Archon harness live smoke test with autonomous PR review and merge.
+  Does: Creates one scoped archon-test artifact file, opens one PR, performs a deterministic self-review, and merges when the review passes.
   NOT for: Real issue fixing, broad code review, planning, research, or production changes.
 
 provider: codex
@@ -18,53 +18,71 @@ nodes:
       EOF
       )
 
-      SESSION=$(printf '%s\n' "$REQUEST" | grep -oE '\[archon-e2e:[^]]+\]' | head -1 | sed -E 's/^\[archon-e2e:([^]]+)\]$/\1/')
-      ISSUE_NUM=$(printf '%s\n' "$REQUEST" | grep -oE 'Issue: #[0-9]+' | head -1 | grep -oE '[0-9]+')
-      BRANCH=$(printf '%s\n' "$REQUEST" | grep -oE 'Use branch: [^[:space:]]+' | head -1 | sed -E 's/^Use branch: //')
+      SESSION=$(printf '%s\n' "$REQUEST" | grep -oE '\[archon-test:[^]]+\]' | head -1 | sed -E 's/^\[archon-test:([^]]+)\]$/\1/' || true)
+      CONTEXT_JSON=$(printf '%s\n' "$REQUEST" | sed -nE 's/^ARCHON_BACKLOG_CONTEXT_JSON: (.+)$/\1/p' | head -1)
+      ISSUE_NUM=""
+      BRANCH=""
+
+      if [ -n "$CONTEXT_JSON" ]; then
+        ISSUE_NUM=$(printf '%s' "$CONTEXT_JSON" | jq -r '.issueNumber // empty')
+        BRANCH=$(printf '%s' "$CONTEXT_JSON" | jq -r '.branch // empty')
+      fi
+
+      if [ -z "$ISSUE_NUM" ]; then
+        ISSUE_NUM=$(printf '%s\n' "$REQUEST" | grep -oE '(Fix issue|Issue:)[[:space:]]*#[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+      fi
+
+      if [ -z "$BRANCH" ]; then
+        BRANCH=$(printf '%s\n' "$REQUEST" | grep -oE 'Use branch: [^[:space:]]+' | head -1 | sed -E 's/^Use branch: //' || true)
+      fi
+
+      if [ -z "$SESSION" ] && [ -n "$ISSUE_NUM" ]; then
+        SESSION="issue-${ISSUE_NUM}"
+      fi
 
       if [ -z "$SESSION" ] || [ -z "$ISSUE_NUM" ] || [ -z "$BRANCH" ]; then
-        echo "Failed to parse required E2E fields" >&2
+        echo "Failed to parse required test fields" >&2
         echo "SESSION=$SESSION ISSUE_NUM=$ISSUE_NUM BRANCH=$BRANCH" >&2
         exit 1
       fi
 
       case "$BRANCH" in
-        archon-e2e/*) ;;
+        archon-test/*|archon/*) ;;
         *)
-          echo "Refusing non-E2E branch: $BRANCH" >&2
+          echo "Refusing non-test branch: $BRANCH" >&2
           exit 1
           ;;
       esac
 
-      ARTIFACT_FILE="archon-e2e/${SESSION}-${ISSUE_NUM}.md"
+      ARTIFACT_FILE="archon-test/${SESSION}-${ISSUE_NUM}.md"
       mkdir -p "$ARTIFACTS_DIR"
       {
         echo "SESSION=$SESSION"
         echo "ISSUE_NUM=$ISSUE_NUM"
         echo "BRANCH=$BRANCH"
         echo "ARTIFACT_FILE=$ARTIFACT_FILE"
-      } > "$ARTIFACTS_DIR/e2e.env"
+      } > "$ARTIFACTS_DIR/test.env"
 
-      echo "Prepared self-merge E2E smoke for issue #$ISSUE_NUM on $BRANCH"
+      echo "Prepared self-merge test smoke for issue #$ISSUE_NUM on $BRANCH"
 
   - id: implement
     depends_on: [prepare]
     bash: |
       set -euo pipefail
-      . "$ARTIFACTS_DIR/e2e.env"
+      . "$ARTIFACTS_DIR/test.env"
 
       BASE="${BASE_BRANCH:-main}"
       git fetch origin "$BASE" --quiet
       git checkout -B "$BRANCH" "origin/$BASE"
 
       mkdir -p "$(dirname "$ARTIFACT_FILE")"
-      echo "Archon E2E self-merge smoke test ${SESSION} issue ${ISSUE_NUM} completed." > "$ARTIFACT_FILE"
+      echo "Archon test self-merge smoke test ${SESSION} issue ${ISSUE_NUM} completed." > "$ARTIFACT_FILE"
 
       git add "$ARTIFACT_FILE"
-      git commit -m "test: add Archon E2E self-merge marker"
+      git commit -m "test: add Archon test self-merge marker"
 
       {
-        echo "# E2E Implementation"
+        echo "# Test Implementation"
         echo
         echo "- Issue: #$ISSUE_NUM"
         echo "- Branch: $BRANCH"
@@ -75,7 +93,7 @@ nodes:
     depends_on: [implement]
     bash: |
       set -euo pipefail
-      . "$ARTIFACTS_DIR/e2e.env"
+      . "$ARTIFACTS_DIR/test.env"
 
       BASE="${BASE_BRANCH:-main}"
       git push -u origin "$BRANCH"
@@ -86,13 +104,13 @@ nodes:
       else
         BODY=$(cat <<EOF
       ## Summary
-      - Adds one disposable Archon E2E self-merge marker file.
+      - Adds one disposable Archon test self-merge marker file.
       - Session: \`${SESSION}\`
       - File: \`${ARTIFACT_FILE}\`
 
       ## Validation
-      - Created by \`archon-e2e-tiny-self-merge\`.
-      - Scoped to \`archon-e2e\`.
+      - Created by \`archon-tiny-self-merge\`.
+      - Scoped to \`archon-test\`.
 
       Closes #${ISSUE_NUM}
       EOF
@@ -100,7 +118,7 @@ nodes:
         gh pr create \
           --base "$BASE" \
           --head "$BRANCH" \
-          --title "test: add Archon E2E self-merge marker" \
+          --title "test: add Archon test self-merge marker" \
           --body "$BODY"
         PR_NUMBER=$(gh pr view --json number -q '.number')
       fi
@@ -114,7 +132,7 @@ nodes:
     depends_on: [create-pr]
     bash: |
       set -euo pipefail
-      . "$ARTIFACTS_DIR/e2e.env"
+      . "$ARTIFACTS_DIR/test.env"
 
       PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
       CHANGED_FILES=$(gh pr view "$PR_NUMBER" --json files --jq '.files[].path')
@@ -138,7 +156,7 @@ nodes:
       fi
 
       {
-        echo "# E2E Self Review"
+        echo "# Test Self Review"
         echo
         echo "- PR: #$PR_NUMBER"
         echo "- Result: passed"
@@ -146,7 +164,7 @@ nodes:
         echo "- Checked session marker: $SESSION"
       } > "$ARTIFACTS_DIR/self-review.md"
 
-      gh pr comment "$PR_NUMBER" --body "Archon E2E self-review passed: one scoped marker file changed."
+      gh pr comment "$PR_NUMBER" --body "Archon test self-review passed: one scoped marker file changed."
       echo "Self-review passed for PR #$PR_NUMBER"
 
   - id: merge-pr

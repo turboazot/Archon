@@ -336,6 +336,30 @@ describe('GitHubAdapter non-slash command context passing', () => {
     );
   });
 
+  test('should target explicit PR number for slash-command PR workflows from issue comments', async () => {
+    const payload = createIssueCommentPayload(
+      '@archon /workflow run archon-smart-pr-review PR #120',
+      {
+        issueNumber: 119,
+        issueTitle: 'Implement docs update',
+      }
+    );
+
+    await adapter.handleWebhook(payload, signPayload(payload));
+
+    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+    expect(mockGetLinkedIssueNumbers).toHaveBeenCalledWith('testuser', 'testrepo', 120);
+
+    const context = mockHandleMessage.mock.calls[0][3];
+    expect(context?.isolationHints).toMatchObject({
+      workflowType: 'pr',
+      workflowId: '120',
+      prBranch: 'feature-branch',
+      prSha: 'abc123def456',
+      isForkPR: false,
+    });
+  });
+
   test('context format matches between slash and non-slash commands', async () => {
     // Slash command
     const slashPayload = createIssueCommentPayload('@archon /help', {

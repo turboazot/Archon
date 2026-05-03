@@ -8,7 +8,7 @@ export const readySuccessFixture: HarnessE2EFixture = {
     makeIssue({
       number: 1,
       title: 'Archon E2E ready success',
-      labels: ['archon:ready', 'archon-workflow:fix-issue', 'area:e2e'],
+      labels: ['archon:ready', 'archon-workflow:fix-issue', 'area:test'],
     }),
   ],
   actionsAfterCycle: {
@@ -24,7 +24,7 @@ export const readySuccessFixture: HarnessE2EFixture = {
               number: 101,
               issueNumber: 1,
               branch: run.branch,
-              labels: ['area:e2e'],
+              labels: ['area:test'],
               changedFiles: ['src/example.ts'],
               checks: 'passing',
               review: 'approved',

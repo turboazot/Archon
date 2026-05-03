@@ -43,19 +43,21 @@ export async function backlogSetupCommand(cwd: string): Promise<void> {
   ];
 
   for (const runtime of runtimes) {
-    for (const label of labels) {
-      await runtime.github.ensureLabel(runtime.config.repo, label);
-    }
+    await runProjectStep(runtime, async () => {
+      for (const label of labels) {
+        await runtime.github.ensureLabel(runtime.config.repo, label);
+      }
 
-    const repoInfo = await runtime.github.getRepositoryInfo(runtime.config.repo);
-    console.log(`Backlog labels are ready for ${runtime.config.repo}.`);
-    console.log(`Project: ${runtime.projectName}`);
-    console.log(`Default branch: ${repoInfo.defaultBranch}`);
-    if (runtime.config.baseBranch && runtime.config.baseBranch !== repoInfo.defaultBranch) {
-      console.log(
-        `Warning: configured base branch ${runtime.config.baseBranch} differs from GitHub default ${repoInfo.defaultBranch}; linked PRs will not auto-close issues.`
-      );
-    }
+      const repoInfo = await runtime.github.getRepositoryInfo(runtime.config.repo);
+      console.log(`Backlog labels are ready for ${runtime.config.repo}.`);
+      console.log(`Project: ${runtime.projectName}`);
+      console.log(`Default branch: ${repoInfo.defaultBranch}`);
+      if (runtime.config.baseBranch && runtime.config.baseBranch !== repoInfo.defaultBranch) {
+        console.log(
+          `Warning: configured base branch ${runtime.config.baseBranch} differs from GitHub default ${repoInfo.defaultBranch}; linked PRs will not auto-close issues.`
+        );
+      }
+    });
   }
 }
 
@@ -63,9 +65,11 @@ export async function backlogReconcileCommand(cwd: string): Promise<void> {
   const runtimes = await createBacklogRuntimes(cwd);
   for (const runtime of runtimes) {
     console.log(`\nBacklog reconcile for ${runtime.config.repo} (${runtime.projectName})`);
-    const report = await runtime.orchestrator.reconcileOnce();
-    printReport(report);
-    await runtime.archon.drainStartedWorkflows();
+    await runProjectStep(runtime, async () => {
+      const report = await runtime.orchestrator.reconcileOnce();
+      printReport(report);
+      await runtime.archon.drainStartedWorkflows();
+    });
   }
 }
 
@@ -79,8 +83,10 @@ export async function backlogRunCommand(options: BacklogCommandOptions): Promise
     for (const runtime of runtimes) {
       console.log(`\nProject: ${runtime.projectName}`);
       console.log(`Repo: ${runtime.config.repo}`);
-      const report = await runtime.orchestrator.reconcileOnce();
-      printReport(report);
+      await runProjectStep(runtime, async () => {
+        const report = await runtime.orchestrator.reconcileOnce();
+        printReport(report);
+      });
     }
 
     if (cycle >= cycles) break;
@@ -91,25 +97,27 @@ export async function backlogRunCommand(options: BacklogCommandOptions): Promise
 export async function backlogStatusCommand(cwd: string): Promise<void> {
   const runtimes = await createBacklogRuntimes(cwd);
   for (const { projectName, config, store, github } of runtimes) {
-    const runs = await store.listRuns(config.repo);
-    const repoInfo = await github.getRepositoryInfo(config.repo);
-    console.log(`Backlog status for ${config.repo}`);
-    console.log(`Project: ${projectName}`);
-    console.log(`Default branch: ${repoInfo.defaultBranch}`);
-    if (repoInfo.autoCloseIssuesEnabled === false) {
-      console.log('Warning: GitHub auto-close for merged linked PRs appears disabled.');
-    }
-    if (runs.length === 0) {
-      console.log('No backlog orchestrator runs recorded.');
-      continue;
-    }
-    for (const run of runs) {
-      const pr = run.prNumber ? ` PR #${String(run.prNumber)}` : '';
-      const error = run.lastError ? ` (${run.lastError})` : '';
-      console.log(
-        `#${String(run.issueNumber)} ${run.status}${pr} ${run.workflowLabel} ${run.branch}${error}`
-      );
-    }
+    await runProjectStep({ projectName, config }, async () => {
+      const runs = await store.listRuns(config.repo);
+      const repoInfo = await github.getRepositoryInfo(config.repo);
+      console.log(`Backlog status for ${config.repo}`);
+      console.log(`Project: ${projectName}`);
+      console.log(`Default branch: ${repoInfo.defaultBranch}`);
+      if (repoInfo.autoCloseIssuesEnabled === false) {
+        console.log('Warning: GitHub auto-close for merged linked PRs appears disabled.');
+      }
+      if (runs.length === 0) {
+        console.log('No backlog orchestrator runs recorded.');
+        return;
+      }
+      for (const run of runs) {
+        const pr = run.prNumber ? ` PR #${String(run.prNumber)}` : '';
+        const error = run.lastError ? ` (${run.lastError})` : '';
+        console.log(
+          `#${String(run.issueNumber)} ${run.status}${pr} ${run.workflowLabel} ${run.branch}${error}`
+        );
+      }
+    });
   }
 }
 
@@ -165,7 +173,9 @@ async function createBacklogRuntime(
   const projectBacklogConfig = backlogHarnessConfig(projectBacklog);
   const { repo, workflowLabelToName: projectWorkflowLabels } = project;
   const projectConfigOverrides = backlogHarnessConfig(project);
+  const defaultHarnessConfig = createDefaultHarnessConfig();
   const workflowLabelToName = {
+    ...defaultHarnessConfig.workflowLabelToName,
     ...serviceBacklog.workflowLabelToName,
     ...projectBacklog.workflowLabelToName,
     ...projectWorkflowLabels,
@@ -262,8 +272,16 @@ function buildWorkflowMessage(
   prNumber?: number
 ): string {
   const prLine = prNumber ? `\nPR: #${String(prNumber)}` : '';
+  const backlogContext = JSON.stringify({
+    repo,
+    issueNumber: issue.number,
+    prNumber: prNumber ?? null,
+    branch,
+  });
   return `Fix issue #${String(issue.number)} in ${repo}.${prLine}
 Use branch: ${branch}
+
+ARCHON_BACKLOG_CONTEXT_JSON: ${backlogContext}
 
 Issue title: ${issue.title}
 
@@ -332,6 +350,20 @@ function resolveProjectCwd(serviceCwd: string, projectCwd: string | undefined): 
   if (!projectCwd?.trim()) return serviceCwd;
   const trimmed = projectCwd.trim();
   return isAbsolute(trimmed) ? trimmed : resolve(serviceCwd, trimmed);
+}
+
+async function runProjectStep(
+  runtime: Pick<BacklogRuntime, 'projectName' | 'config'>,
+  step: () => Promise<void>
+): Promise<void> {
+  try {
+    await step();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `Skipping backlog project ${runtime.projectName} (${runtime.config.repo}): ${message}`
+    );
+  }
 }
 
 function backlogHarnessConfig(

@@ -347,7 +347,13 @@ export class GitHubAdapter implements IPlatformAdapter {
     }
 
     // issue_comment (covers both issues and PRs)
+    //
+    // GitHub includes the deleted/edited comment body in issue_comment webhooks.
+    // Processing those as fresh user input can replay old @archon commands when
+    // someone cleans up comments or edits a typo. Only a newly-created comment is
+    // an intentional invocation.
     if (event.comment) {
+      if (event.action !== 'created') return null;
       const number = event.issue?.number ?? event.pull_request?.number;
       if (!number) return null;
       return {
@@ -384,6 +390,29 @@ export class GitHubAdapter implements IPlatformAdapter {
   private stripMention(text: string): string {
     const pattern = new RegExp(`@${this.botMention}[\\s,:;]+`, 'gi');
     return text.replace(pattern, '').trim();
+  }
+
+  private extractPRWorkflowTarget(text: string): number | null {
+    const firstLine = text.trim().split('\n')[0]?.trim() ?? '';
+    if (!firstLine.startsWith('/')) return null;
+
+    const workflowMatch = /^\/workflow\s+run\s+([^\s]+)/i.exec(firstLine);
+    if (!workflowMatch) return null;
+
+    const workflowName = workflowMatch[1];
+    if (!/(?:^|-)pr(?:-|$)|pull-request|validate-pr/i.test(workflowName)) {
+      return null;
+    }
+
+    const explicitPRMatch =
+      /\b(?:pr|pull request)\s*#?\s*(\d+)\b/i.exec(firstLine) ?? /#(\d+)\b/.exec(firstLine);
+    if (!explicitPRMatch) return null;
+
+    const rawNumber = explicitPRMatch[1];
+    if (!rawNumber) return null;
+
+    const prNumber = Number.parseInt(rawNumber, 10);
+    return Number.isSafeInteger(prNumber) && prNumber > 0 ? prNumber : null;
   }
 
   /**
@@ -810,21 +839,28 @@ ${userComment}`;
 
     // 10. Gather isolation hints for orchestrator
     // The orchestrator now handles all isolation decisions
-    const isPR = eventType === 'pull_request' || !!pullRequest || !!issue?.pull_request;
+    const strippedComment = this.stripMention(comment);
+    const explicitPRWorkflowTarget = this.extractPRWorkflowTarget(strippedComment);
+    const targetNumber = explicitPRWorkflowTarget ?? number;
+    const isPR =
+      eventType === 'pull_request' ||
+      !!pullRequest ||
+      !!issue?.pull_request ||
+      explicitPRWorkflowTarget !== null;
 
     // Build isolation hints for orchestrator
     const isolationHints: IsolationHints = {
       workflowType: isPR ? 'pr' : 'issue',
-      workflowId: String(number),
+      workflowId: String(targetNumber),
     };
 
     // For PRs: get linked issues and branch info
     if (isPR) {
       // Get linked issues for worktree sharing
-      const linkedIssues = await getLinkedIssueNumbers(owner, repo, number);
+      const linkedIssues = await getLinkedIssueNumbers(owner, repo, targetNumber);
       if (linkedIssues.length > 0) {
         isolationHints.linkedIssues = linkedIssues;
-        getLog().info({ prNumber: number, linkedIssues }, 'github.pr_linked_issues');
+        getLog().info({ prNumber: targetNumber, linkedIssues }, 'github.pr_linked_issues');
       }
 
       // Fetch PR head branch, SHA, and fork status for isolation
@@ -832,7 +868,7 @@ ${userComment}`;
         const { data: prData } = await this.octokit.rest.pulls.get({
           owner,
           repo,
-          pull_number: number,
+          pull_number: targetNumber,
         });
         isolationHints.prBranch = toBranchName(prData.head.ref);
         isolationHints.prSha = prData.head.sha;
@@ -848,7 +884,7 @@ ${userComment}`;
 
         getLog().info(
           {
-            prNumber: number,
+            prNumber: targetNumber,
             headRef: prData.head.ref,
             headSha: prData.head.sha.substring(0, 7),
             isFork: isolationHints.isForkPR,
@@ -877,7 +913,6 @@ ${userComment}`;
     }
 
     // 11. Build message with context
-    const strippedComment = this.stripMention(comment);
     let finalMessage = strippedComment;
     let contextToAppend: string | undefined;
 

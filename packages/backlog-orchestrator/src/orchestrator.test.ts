@@ -62,19 +62,19 @@ describe('HarnessOrchestrator', () => {
     expect(github.getComments(1)[0]?.body).toContain('Started archon-fix-github-issue');
   });
 
-  test('starts the video recording E2E workflow from its routing label', async () => {
+  test('starts the video recording workflow from its routing label', async () => {
     const { archon, orchestrator } = createHarness({
       issues: [
         makeIssue({
           number: 1,
-          labels: ['archon:ready', 'archon-workflow:e2e-video-recording', 'area:e2e'],
+          labels: ['archon:ready', 'archon-workflow:video-recording', 'area:test'],
         }),
       ],
     });
 
     await orchestrator.reconcileOnce();
 
-    expect(archon.getStartedRuns()[0]?.workflowName).toBe('archon-e2e-video-recording');
+    expect(archon.getStartedRuns()[0]?.workflowName).toBe('archon-video-recording');
   });
 
   test('marks configured PR-less workflows done after successful completion', async () => {
@@ -82,7 +82,7 @@ describe('HarnessOrchestrator', () => {
       issues: [
         makeIssue({
           number: 1,
-          labels: ['archon:ready', 'archon-workflow:e2e-video-recording', 'area:e2e'],
+          labels: ['archon:ready', 'archon-workflow:video-recording', 'area:test'],
         }),
       ],
     });
@@ -143,7 +143,7 @@ describe('HarnessOrchestrator', () => {
     expect(archon.getStartedRuns()).toHaveLength(0);
   });
 
-  test('scenario 4: leaves dependency-blocked issues unstarted and comments once', async () => {
+  test('scenario 4: leaves dependency-blocked issues to GitHub native blockers', async () => {
     const { github, archon, orchestrator } = createHarness({
       issues: [
         makeIssue({ number: 1, labels: [] }),
@@ -161,8 +161,8 @@ describe('HarnessOrchestrator', () => {
 
     expect(report.blockedIssues.map(blocked => blocked.issue.number)).toEqual([2]);
     expect(report.blockedIssues[0]?.reason).toBe('Blocked by open issue(s): 1');
-    expect(issue?.labels).toContain('archon:blocked');
-    expect(github.getComments(2)).toHaveLength(1);
+    expect(issue?.labels).not.toContain('archon:blocked');
+    expect(github.getComments(2)).toHaveLength(0);
     expect(archon.getStartedRuns()).toHaveLength(0);
   });
 
@@ -490,6 +490,134 @@ describe('HarnessOrchestrator', () => {
     ).toBe(true);
   });
 
+  test('does not schedule conflict workflow while implementation workflow is still running', async () => {
+    const { github, archon, store, orchestrator } = createHarness({
+      issues: [
+        makeIssue({
+          number: 1,
+          labels: ['archon:ready', 'archon-workflow:fix-issue-simple'],
+        }),
+      ],
+    });
+
+    await orchestrator.reconcileOnce();
+    const implementationRun = archon.getStartedRuns()[0];
+    github.addPullRequest(
+      makePullRequest({
+        number: 10,
+        issueNumber: 1,
+        branch: implementationRun.branch,
+        checks: 'passing',
+        mergeable: false,
+        mergeability: 'conflicting',
+      })
+    );
+
+    await orchestrator.reconcileOnce();
+    const runs = await store.listRuns(repo);
+
+    expect(archon.getStartedRuns()).toHaveLength(1);
+    expect(runs[0]?.status).toBe('running');
+    expect(runs[0]?.prNumber).toBeUndefined();
+  });
+
+  test('retries a cancelled conflict workflow against the existing PR', async () => {
+    const { github, archon, store, orchestrator } = createHarness({
+      issues: [
+        makeIssue({
+          number: 1,
+          labels: ['archon:ready', 'archon-workflow:fix-issue-simple'],
+        }),
+      ],
+    });
+
+    await orchestrator.reconcileOnce();
+    const implementationRun = archon.getStartedRuns()[0];
+    archon.completeRun(implementationRun.id, 'succeeded');
+    github.addPullRequest(
+      makePullRequest({
+        number: 10,
+        issueNumber: 1,
+        branch: implementationRun.branch,
+        checks: 'passing',
+        mergeable: false,
+        mergeability: 'conflicting',
+      })
+    );
+
+    await orchestrator.reconcileOnce();
+    const firstConflictRun = archon.getStartedRuns()[1];
+    archon.completeRun(firstConflictRun.id, 'cancelled', 'Workflow already active on this path');
+
+    await orchestrator.reconcileOnce();
+    const runs = await store.listRuns(repo);
+    const startedRuns = archon.getStartedRuns();
+
+    expect(startedRuns.map(run => run.workflowName)).toEqual([
+      'archon-fix-github-issue-simple',
+      'archon-resolve-conflicts',
+      'archon-resolve-conflicts',
+    ]);
+    expect(startedRuns[2]?.branch).toBe(implementationRun.branch);
+    expect(runs[0]?.prNumber).toBe(10);
+    expect(runs[0]?.status).toBe('conflict_running');
+    expect(runs[0]?.workflowRunId).toBe(startedRuns[2]?.id);
+    expect(runs[0]?.fixAttempts).toBe(2);
+    expect(runs[0]?.lastError).toBe('Workflow already active on this path');
+  });
+
+  test('retries conflict workflow when the tracked workflow record is missing', async () => {
+    const { archon, store, orchestrator } = createHarness({
+      issues: [
+        makeIssue({
+          number: 1,
+          labels: ['archon:in-progress', 'archon-workflow:fix-issue-simple'],
+        }),
+      ],
+      pullRequests: [
+        makePullRequest({
+          number: 10,
+          issueNumber: 1,
+          branch: 'archon/issue-1',
+          checks: 'passing',
+          mergeable: false,
+          mergeability: 'conflicting',
+        }),
+      ],
+    });
+
+    await store.createRun({
+      id: 'orchestrator-missing-conflict-run',
+      repo,
+      issueNumber: 1,
+      workflowRunId: 'missing-conflict-workflow',
+      branch: 'archon/issue-1',
+      prNumber: 10,
+      status: 'conflict_running',
+      workflowLabel: 'archon-workflow:fix-issue-simple',
+      areaLabels: [],
+      changedFiles: [],
+      startedAt: fixedNow,
+      updatedAt: fixedNow,
+      lastError: 'PR #10 has merge conflicts',
+      runAttempts: 1,
+      fixAttempts: 1,
+      commentKeys: ['conflict-1'],
+    });
+
+    await orchestrator.reconcileOnce();
+    const runs = await store.listRuns(repo);
+    const startedRuns = archon.getStartedRuns();
+
+    expect(startedRuns).toHaveLength(1);
+    expect(startedRuns[0]?.workflowName).toBe('archon-resolve-conflicts');
+    expect(startedRuns[0]?.branch).toBe('archon/issue-1');
+    expect(runs[0]?.status).toBe('conflict_running');
+    expect(runs[0]?.workflowRunId).toBe(startedRuns[0]?.id);
+    expect(runs[0]?.fixAttempts).toBe(2);
+    expect(runs[0]?.lastError).toBe('Conflict workflow record missing');
+  });
+
   test('scenario 12c: resumes PR validation after conflict workflow completes', async () => {
     const { github, archon, store, orchestrator } = createHarness({
       issues: [
@@ -777,6 +905,52 @@ describe('HarnessOrchestrator', () => {
     expect(github.getComments(1).some(comment => comment.body.includes('Fixes #1'))).toBe(true);
   });
 
+  test('abandons stale active runs for closed issues before scheduling new work', async () => {
+    const { github, archon, store, orchestrator } = createHarness(
+      {
+        issues: [
+          makeIssue({
+            number: 1,
+            state: 'closed',
+            labels: ['archon:in-progress', 'archon-workflow:fix-issue', 'area:test'],
+          }),
+          makeIssue({
+            number: 2,
+            labels: ['archon:ready', 'archon-workflow:tiny-self-merge', 'area:test'],
+          }),
+        ],
+      },
+      { maxParallelWorkflows: 1 }
+    );
+
+    await store.createRun({
+      id: 'orchestrator-stale-closed',
+      repo,
+      issueNumber: 1,
+      workflowRunId: 'workflow-stale-closed',
+      branch: 'archon/issue-1',
+      status: 'running',
+      workflowLabel: 'archon-workflow:fix-issue',
+      areaLabels: ['area:test'],
+      changedFiles: [],
+      startedAt: fixedNow,
+      updatedAt: fixedNow,
+      runAttempts: 1,
+      fixAttempts: 0,
+      commentKeys: [],
+    });
+
+    const report = await orchestrator.reconcileOnce();
+    const runs = await store.listRuns(repo);
+    const closedIssue = await github.getIssue(repo, 1);
+
+    expect(runs.find(run => run.issueNumber === 1)?.status).toBe('abandoned');
+    expect(runs.find(run => run.issueNumber === 1)?.lastError).toBe('Issue #1 is closed');
+    expect(closedIssue?.labels).not.toContain('archon:in-progress');
+    expect(report.startedRuns.map(run => run.issueNumber)).toEqual([2]);
+    expect(archon.getStartedRuns().map(run => run.issueNumber)).toEqual([2]);
+  });
+
   test('starts two issues in parallel after their shared blocker closes', async () => {
     const { github, archon, orchestrator } = createHarness(
       {
@@ -784,12 +958,12 @@ describe('HarnessOrchestrator', () => {
           makeIssue({ number: 1, labels: [] }),
           makeIssue({
             number: 2,
-            labels: ['archon:ready', 'archon-workflow:e2e-tiny-self-merge', 'area:e2e'],
+            labels: ['archon:ready', 'archon-workflow:tiny-self-merge', 'area:test'],
             blockedByIssueNumbers: [1],
           }),
           makeIssue({
             number: 3,
-            labels: ['archon:ready', 'archon-workflow:e2e-tiny-self-merge', 'area:e2e'],
+            labels: ['archon:ready', 'archon-workflow:tiny-self-merge', 'area:test'],
             blockedByIssueNumbers: [1],
           }),
         ],
@@ -815,8 +989,8 @@ describe('HarnessOrchestrator', () => {
     expect(secondIssue?.labels).not.toContain('archon:blocked');
     expect(thirdIssue?.labels).not.toContain('archon:blocked');
     expect(archon.getStartedRuns().map(run => run.workflowName)).toEqual([
-      'archon-e2e-tiny-self-merge',
-      'archon-e2e-tiny-self-merge',
+      'archon-tiny-self-merge',
+      'archon-tiny-self-merge',
     ]);
   });
 });

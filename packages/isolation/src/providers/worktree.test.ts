@@ -636,6 +636,25 @@ describe('WorktreeProvider', () => {
       await expect(provider.create(request)).rejects.toThrow(/belongs to a different clone/);
     });
 
+    test('adopts existing worktree by generated branch name before resetting branch', async () => {
+      worktreeExistsSpy.mockResolvedValueOnce(false);
+      findWorktreeByBranchSpy.mockResolvedValue('/workspace/worktrees/repo/task-archon-issue-42');
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/worktrees/archon/issue-42\n');
+
+      const env = await provider.create(baseRequest);
+
+      expect(env.workingPath).toBe('/workspace/worktrees/repo/task-archon-issue-42');
+      expect(env.branchName).toBe('archon/issue-42');
+      expect(env.metadata).toHaveProperty('adopted', true);
+      expect(env.metadata).toHaveProperty('adoptedFrom', 'branch');
+
+      expect(execSpy).not.toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'branch', '-f', 'archon/issue-42', 'origin/main'],
+        expect.any(Object)
+      );
+    });
+
     test('resets stale branch to start-point when it already exists', async () => {
       let callCount = 0;
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {

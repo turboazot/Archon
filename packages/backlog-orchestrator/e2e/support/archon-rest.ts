@@ -208,14 +208,14 @@ export class ArchonRestAdapter implements ArchonPort {
   ): boolean {
     return (
       candidate.workflow_name === input.workflowName &&
-      candidate.user_message.includes(`[archon-e2e:${this.sessionId}]`) &&
+      candidate.user_message.includes(`[archon-test:${this.sessionId}]`) &&
       candidate.user_message.includes(`#${String(input.issue.number)}`)
     );
   }
 
   private branchForIssue(issue: HarnessIssue): string {
     if (this.branchName) return this.branchName;
-    return `archon-e2e/issue-${String(issue.number)}-${this.sessionId}`;
+    return `archon-test/issue-${String(issue.number)}-${this.sessionId}`;
   }
 
   private async request<T>(
@@ -253,7 +253,7 @@ function buildWorkflowPrompt(input: StartWorkflowInput, branch: string, sessionI
   const prLine = input.prNumber ? `PR: #${String(input.prNumber)}\n` : '';
   if (input.mode === 'conflict') {
     return [
-      `[archon-e2e:${sessionId}]`,
+      `[archon-test:${sessionId}]`,
       `Resolve merge conflicts for PR #${String(input.prNumber)}.`,
       `Repository: ${input.repo}`,
       `Issue: #${String(input.issue.number)} ${input.issue.title}`,
@@ -268,7 +268,7 @@ function buildWorkflowPrompt(input: StartWorkflowInput, branch: string, sessionI
   }
 
   return [
-    `[archon-e2e:${sessionId}]`,
+    `[archon-test:${sessionId}]`,
     `Repository: ${input.repo}`,
     `Issue: #${String(input.issue.number)} ${input.issue.title}`,
     prLine.trimEnd(),

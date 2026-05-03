@@ -13,6 +13,7 @@ This guide covers a production-like setup without Docker:
 
 - `archon.service` runs the compiled Archon binary as a user-level systemd service.
 - `archon-webhook.service` runs ngrok as a companion tunnel.
+- `archon-tailscale.service` optionally exposes Archon inside the private tailnet.
 - `archon-orchestrator.service` optionally runs the backlog orchestrator loop.
 - An ngrok Traffic Policy exposes only the GitHub webhook endpoint, not the Web UI or API.
 
@@ -188,6 +189,53 @@ journalctl --user -u archon-webhook.service -f
 If you use a free/random ngrok URL, the hostname may change after restart. Use an ngrok reserved
 domain and add `--url https://<reserved-domain>` to `archon-webhook.service` if webhook URLs need
 to remain stable.
+
+## Tailscale tailnet access
+
+Use Tailscale Serve when Archon should be reachable only inside your private tailnet. This is
+separate from the ngrok webhook tunnel and does not make Archon public on the internet.
+
+Create `~/.config/systemd/user/archon-tailscale.service`:
+
+```ini
+[Unit]
+Description=Archon tailnet access via Tailscale Serve
+Documentation=https://tailscale.com/kb/1247/funnel-serve-use-cases
+After=network-online.target archon.service
+Wants=network-online.target archon.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/ubuntu/projects/misc/Archon
+Environment=HOME=/home/ubuntu
+ExecStart=/usr/bin/tailscale serve --yes --bg --https 9443 127.0.0.1:3090
+ExecStop=/usr/bin/tailscale serve --https=9443 off
+
+[Install]
+WantedBy=default.target
+```
+
+Then enable and start it:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now archon-tailscale.service
+systemctl --user status archon-tailscale.service
+tailscale serve status
+```
+
+The tailnet URL is:
+
+```text
+https://<your-device>.<your-tailnet>.ts.net:9443
+```
+
+For this machine, that is currently:
+
+```text
+https://personal.tail267447.ts.net:9443
+```
 
 ## Backlog orchestrator service
 
