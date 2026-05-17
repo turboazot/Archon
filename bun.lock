@@ -39,18 +39,6 @@
         "typescript": "^5.0.0",
       },
     },
-    "packages/backlog-orchestrator": {
-      "name": "@archon/backlog-orchestrator",
-      "version": "0.3.10",
-      "dependencies": {
-        "@archon/core": "workspace:*",
-        "@archon/git": "workspace:*",
-        "@archon/paths": "workspace:*",
-      },
-      "peerDependencies": {
-        "typescript": "^5.0.0",
-      },
-    },
     "packages/cli": {
       "name": "@archon/cli",
       "version": "0.3.10",
@@ -59,7 +47,6 @@
       },
       "dependencies": {
         "@archon/adapters": "workspace:*",
-        "@archon/backlog-orchestrator": "workspace:*",
         "@archon/core": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
@@ -273,8 +260,6 @@
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.81.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-D4K5PvEV6wPiRtVlVsJHIUhHAmOZ6IT/I9rKlTf84gR7GyyAurPJK7z9BOf/AZqC5d1DhYQGJNKRmV+q8dGhgw=="],
 
     "@archon/adapters": ["@archon/adapters@workspace:packages/adapters"],
-
-    "@archon/backlog-orchestrator": ["@archon/backlog-orchestrator@workspace:packages/backlog-orchestrator"],
 
     "@archon/cli": ["@archon/cli@workspace:packages/cli"],
 

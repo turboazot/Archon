@@ -220,24 +220,6 @@ export interface RepoConfig {
   env?: Record<string, string>;
 
   /**
-   * GitHub backlog orchestrator settings.
-   */
-  backlog?: {
-    repo?: string;
-    projects?: (string | BacklogProjectConfig)[];
-    maxParallelWorkflows?: number;
-    maxOpenAgentPrs?: number;
-    maxNewRunsPerCycle?: number;
-    maxRunAttempts?: number;
-    maxFixAttempts?: number;
-    conflictWorkflowName?: string;
-    areaLockPolicy?: 'none' | 'conservative';
-    workflowLabelToName?: Record<string, string>;
-    workflowLabelsCompletingWithoutPr?: string[];
-    autoMergeEnabled?: boolean;
-  };
-
-  /**
    * Default commands/workflows configuration
    */
   defaults?: {
@@ -263,23 +245,6 @@ export interface RepoConfig {
      */
     loadDefaultWorkflows?: boolean;
   };
-}
-
-export interface BacklogProjectConfig {
-  name?: string;
-  repo: string;
-  cwd?: string;
-  baseBranch?: string;
-  maxParallelWorkflows?: number;
-  maxOpenAgentPrs?: number;
-  maxNewRunsPerCycle?: number;
-  maxRunAttempts?: number;
-  maxFixAttempts?: number;
-  conflictWorkflowName?: string;
-  areaLockPolicy?: 'none' | 'conservative';
-  workflowLabelToName?: Record<string, string>;
-  workflowLabelsCompletingWithoutPr?: string[];
-  autoMergeEnabled?: boolean;
 }
 
 /**
@@ -333,21 +298,6 @@ export interface MergedConfig {
    * Undefined when no env vars are configured.
    */
   envVars?: Record<string, string>;
-
-  backlog?: {
-    repo?: string;
-    projects?: (string | BacklogProjectConfig)[];
-    maxParallelWorkflows?: number;
-    maxOpenAgentPrs?: number;
-    maxNewRunsPerCycle?: number;
-    maxRunAttempts?: number;
-    maxFixAttempts?: number;
-    conflictWorkflowName?: string;
-    areaLockPolicy?: 'none' | 'conservative';
-    workflowLabelToName?: Record<string, string>;
-    workflowLabelsCompletingWithoutPr?: string[];
-    autoMergeEnabled?: boolean;
-  };
 }
 
 /**
